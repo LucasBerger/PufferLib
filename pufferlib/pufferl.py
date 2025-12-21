@@ -94,7 +94,7 @@ class PuffeRL:
         device = config['device']
         self.observations = torch.zeros(segments, horizon, *obs_space.shape,
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[obs_space.dtype],
-            pin_memory=device == 'cuda' and config['cpu_offload'],
+            pin_memory=bool(device == 'cuda' and config['cpu_offload']),
             device='cpu' if config['cpu_offload'] else device)
         self.actions = torch.zeros(segments, horizon, *atn_space.shape, device=device,
             dtype=pufferlib.pytorch.numpy_to_torch_dtype_dict[atn_space.dtype])
