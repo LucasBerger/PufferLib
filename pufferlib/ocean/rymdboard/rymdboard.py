@@ -20,10 +20,9 @@ BOARD_TILES = BOARD_SIZE * BOARD_SIZE
 OBS_BOARD_SIZE = 100
 OBS_MARKET_SIZE = 210  # 7 cards * 30 features each
 OBS_CRYSTAL_SIZE = 12
-OBS_TOTAL_SIZE = OBS_BOARD_SIZE + OBS_MARKET_SIZE + OBS_CRYSTAL_SIZE
-
-# Action space: 7 cards × 10 × 10 positions × 4 rotations = 2800
-NUM_ACTIONS = 2800
+OBS_REAL_SIZE = 322  # BOARD (100) + MARKET (210) + CRYSTAL (12)
+NUM_ACTIONS = 2800   # 7 cards * 10 * 10 * 4
+OBS_TOTAL_SIZE = OBS_REAL_SIZE + NUM_ACTIONS
 
 
 class Rymdboard(pufferlib.PufferEnv):
@@ -53,7 +52,7 @@ class Rymdboard(pufferlib.PufferEnv):
         self.single_observation_space = gymnasium.spaces.Box(
             low=0.0,
             high=1.0,
-            shape=(OBS_TOTAL_SIZE + NUM_ACTIONS,),
+            shape=(OBS_TOTAL_SIZE,),
             dtype=np.float32
         )
         self.single_action_space = gymnasium.spaces.Discrete(NUM_ACTIONS)

@@ -1087,17 +1087,26 @@ class Rymdboard(nn.Module):
                 nn.init.normal_(module.weight, std=0.02)
     
     def forward(self, observations, state=None):
+        action_mask = None
+        if isinstance(observations, tuple):
+            observations, action_mask = observations
+        elif observations.shape[-1] > 322:
+            action_mask = observations[:, 322:]
+            observations = observations[:, :322]
+
         hidden = self.encode_observations(observations)
         actions, value = self.decode_actions(hidden)
+
+        if action_mask is not None:
+             actions = actions.masked_fill(action_mask < 0.5, -1e9)
+
         return actions, value
     
     def forward_train(self, x, state=None):
         return self.forward(x, state)
 
     def forward_eval(self, observations, state=None):
-        hidden = self.encode_observations(observations, state=state)
-        logits, values = self.decode_actions(hidden)
-        return logits, values
+        return self.forward(observations, state)
     
     def encode_observations(self, observations, state=None):
         batch_size = observations.shape[0]
@@ -1290,7 +1299,7 @@ class RymdboardHybridPolicy(nn.Module):
         # --- CRITICAL: Action Masking ---
         if action_mask is not None:
             # Set invalid actions to a very large negative number
-            actions = actions.masked_fill(action_mask == 0, -1e9)
+            actions = actions.masked_fill(action_mask < 0.5, -1e9)
             
         return actions, value
     

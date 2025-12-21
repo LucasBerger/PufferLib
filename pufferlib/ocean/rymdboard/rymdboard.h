@@ -604,16 +604,20 @@ static void fill_observation(Rymdboard* env) {
         }
     }
 
+    // Explicitly zero the mask area first
+    for (int i = 0; i < NUM_ACTIONS; i++) {
+        env->observations[OBS_REAL_SIZE + i] = 0.0f;
+    }
+
     for (int card_idx = 0; card_idx < TOTAL_MARKET_SLOTS; card_idx++) {
         for (int x = 0; x < BOARD_SIZE; x++) {
             for (int y = 0; y < BOARD_SIZE; y++) {
                 for (int r = 0; r < 4; r++) {
-                    int valid = 0;
                     if (can_place_tile(env, x, y, rotated_shapes[card_idx][r], num_cells[card_idx]) &&
                         is_connected_to_network(env, x, y, rotated_shapes[card_idx][r], num_cells[card_idx])) {
-                        valid = 1;
+                        int action_idx = card_idx * 400 + x * 40 + y * 4 + r;
+                        env->observations[OBS_REAL_SIZE + action_idx] = 1.0f;
                     }
-                    env->observations[idx++] = (float)valid;
                 }
             }
         }
