@@ -434,6 +434,18 @@ static PyObject* vec_init(PyObject* self, PyObject* args, PyObject* kwargs) {
         }
         Py_DECREF(py_seed);
 
+        // Disable render_mode for all environments except the first one
+        if (i == 1) {
+            PyObject* zero = PyLong_FromLong(0);
+            if (PyDict_SetItemString(kwargs, "render_mode", zero) < 0) {
+                PyErr_SetString(PyExc_RuntimeError, "Failed to set render_mode in kwargs");
+                Py_DECREF(zero);
+                Py_DECREF(kwargs);
+                return NULL;
+            }
+            Py_DECREF(zero);
+        }
+
         PyObject* empty_args = PyTuple_New(0);
         my_init(env, empty_args, kwargs);
         if (PyErr_Occurred()) {

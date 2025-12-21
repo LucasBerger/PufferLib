@@ -1,13 +1,24 @@
 import numpy as np
-import gym
+try:
+    import gym
+except ImportError:
+    gym = None
 import gymnasium
 
-Box = (gym.spaces.Box, gymnasium.spaces.Box)
-Dict = (gym.spaces.Dict, gymnasium.spaces.Dict)
-Discrete = (gym.spaces.Discrete, gymnasium.spaces.Discrete)
-MultiBinary = (gym.spaces.MultiBinary, gymnasium.spaces.MultiBinary)
-MultiDiscrete = (gym.spaces.MultiDiscrete, gymnasium.spaces.MultiDiscrete)
-Tuple = (gym.spaces.Tuple, gymnasium.spaces.Tuple)
+if gym is not None:
+    Box = (gym.spaces.Box, gymnasium.spaces.Box)
+    Dict = (gym.spaces.Dict, gymnasium.spaces.Dict)
+    Discrete = (gym.spaces.Discrete, gymnasium.spaces.Discrete)
+    MultiBinary = (gym.spaces.MultiBinary, gymnasium.spaces.MultiBinary)
+    MultiDiscrete = (gym.spaces.MultiDiscrete, gymnasium.spaces.MultiDiscrete)
+    Tuple = (gym.spaces.Tuple, gymnasium.spaces.Tuple)
+else:
+    Box = (gymnasium.spaces.Box,)
+    Dict = (gymnasium.spaces.Dict,)
+    Discrete = (gymnasium.spaces.Discrete,)
+    MultiBinary = (gymnasium.spaces.MultiBinary,)
+    MultiDiscrete = (gymnasium.spaces.MultiDiscrete,)
+    Tuple = (gymnasium.spaces.Tuple,)
 
 def joint_space(space, n):
     if isinstance(space, Discrete):

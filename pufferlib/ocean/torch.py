@@ -963,3 +963,202 @@ class G2048(nn.Module):
         logits = self.decoder(hidden)
         values = self.value(hidden)
         return logits, values
+
+
+# ============================================================================
+# Rymdboard Transformer Policy
+# ============================================================================
+
+class RymdboardTransformerBlock(nn.Module):
+    """A single transformer encoder block with multi-head self-attention."""
+    
+    def __init__(self, embed_dim=128, num_heads=4, ff_dim=256, dropout=0.1):
+        super().__init__()
+        self.attention = nn.MultiheadAttention(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.norm2 = nn.LayerNorm(embed_dim)
+        self.ff = nn.Sequential(
+            nn.Linear(embed_dim, ff_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(ff_dim, embed_dim),
+            nn.Dropout(dropout),
+        )
+    
+    def forward(self, x, mask=None):
+        attn_out, _ = self.attention(x, x, x, key_padding_mask=mask)
+        x = self.norm1(x + attn_out)
+        ff_out = self.ff(x)
+        x = self.norm2(x + ff_out)
+        return x
+
+
+class Rymdboard(nn.Module):
+    """
+    Transformer-based policy for Rymdboard tile-placement game.
+    
+    Observation format (322 floats from C environment):
+    - Board: 100 floats (normalized tile type + ownership per cell)
+    - Market: 210 floats (7 cards × 30 features each)
+    - Crystal: 12 floats (3 crystals × 4 features each)
+    
+    The policy reshapes the flat observation into tokens and processes
+    with a transformer encoder.
+    """
+    
+    def __init__(
+        self, 
+        env, 
+        embed_dim=128,
+        num_heads=4,
+        ff_dim=256,
+        num_layers=3,
+        dropout=0.1,
+        hidden_size=256,
+        **kwargs
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.is_continuous = False
+        self.embed_dim = embed_dim
+        
+        # Observation dimensions (must match rymdboard.h)
+        self.board_size = 100
+        self.market_size = 210  # 7 cards × 30 features
+        self.crystal_size = 12  # 3 crystals × 4 features
+        self.num_cards = 7
+        self.card_features = 30
+        self.num_crystals = 3
+        self.crystal_features = 4
+        
+        # Token embeddings
+        self.board_embed = nn.Linear(1, embed_dim)  # Each cell is 1 float
+        self.market_embed = nn.Linear(self.card_features, embed_dim)  # Each card is 30 features
+        self.crystal_embed = nn.Linear(self.crystal_features, embed_dim)  # Each crystal is 4 features
+        
+        # Learnable type embeddings (board=0, market=1, crystal=2, cls=3)
+        self.type_embed = nn.Embedding(4, embed_dim)
+        
+        # Learnable positional embeddings for board (10x10)
+        self.board_pos_embed = nn.Parameter(torch.randn(1, 100, embed_dim) * 0.02)
+        
+        # Learnable positional embeddings for market (7 slots)
+        self.market_pos_embed = nn.Parameter(torch.randn(1, 7, embed_dim) * 0.02)
+        
+        # CLS token for aggregation
+        self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim) * 0.02)
+        
+        # Transformer encoder layers
+        self.transformer_layers = nn.ModuleList([
+            RymdboardTransformerBlock(embed_dim, num_heads, ff_dim, dropout)
+            for _ in range(num_layers)
+        ])
+        
+        # Output projection
+        self.output_proj = nn.Sequential(
+            pufferlib.pytorch.layer_init(nn.Linear(embed_dim * 2, ff_dim)),
+            nn.GELU(),
+            pufferlib.pytorch.layer_init(nn.Linear(ff_dim, hidden_size)),
+            nn.GELU(),
+        )
+        
+        # Action space: 2800 discrete actions (7 cards × 10×10 positions × 4 rotations)
+        num_actions = env.single_action_space.n
+        self.actor = pufferlib.pytorch.layer_init(
+            nn.Linear(hidden_size, num_actions), std=0.01)
+        self.value_fn = pufferlib.pytorch.layer_init(
+            nn.Linear(hidden_size, 1), std=1.0)
+        
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Initialize weights for stability."""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight, gain=0.1)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):
+                nn.init.normal_(module.weight, std=0.02)
+    
+    def forward(self, observations, state=None):
+        hidden = self.encode_observations(observations)
+        actions, value = self.decode_actions(hidden)
+        return actions, value
+    
+    def forward_train(self, x, state=None):
+        return self.forward(x, state)
+
+    def forward_eval(self, observations, state=None):
+        hidden = self.encode_observations(observations, state=state)
+        logits, values = self.decode_actions(hidden)
+        return logits, values
+    
+    def encode_observations(self, observations, state=None):
+        batch_size = observations.shape[0]
+        device = observations.device
+        observations = observations.float()
+        
+        # Split observation into components
+        board_obs = observations[:, :self.board_size]  # (B, 100)
+        market_obs = observations[:, self.board_size:self.board_size + self.market_size]  # (B, 210)
+        crystal_obs = observations[:, self.board_size + self.market_size:]  # (B, 12)
+        
+        # Embed board tokens (each cell as a token)
+        board_tokens = board_obs.unsqueeze(-1)  # (B, 100, 1)
+        board_tokens = self.board_embed(board_tokens)  # (B, 100, E)
+        board_tokens = board_tokens + self.board_pos_embed
+        board_types = torch.zeros(batch_size, 100, dtype=torch.long, device=device)
+        board_tokens = board_tokens + self.type_embed(board_types)
+        
+        # Embed market tokens (7 cards, each with 30 features)
+        market_tokens = market_obs.view(batch_size, self.num_cards, self.card_features)  # (B, 7, 30)
+        market_tokens = self.market_embed(market_tokens)  # (B, 7, E)
+        market_tokens = market_tokens + self.market_pos_embed
+        market_types = torch.ones(batch_size, 7, dtype=torch.long, device=device)
+        market_tokens = market_tokens + self.type_embed(market_types)
+        
+        # Embed crystal tokens (3 crystals, each with 4 features)
+        crystal_tokens = crystal_obs.view(batch_size, self.num_crystals, self.crystal_features)  # (B, 3, 4)
+        crystal_tokens = self.crystal_embed(crystal_tokens)  # (B, 3, E)
+        crystal_types = torch.full((batch_size, 3), 2, dtype=torch.long, device=device)
+        crystal_tokens = crystal_tokens + self.type_embed(crystal_types)
+        
+        # CLS token
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1)  # (B, 1, E)
+        cls_types = torch.full((batch_size, 1), 3, dtype=torch.long, device=device)
+        cls_tokens = cls_tokens + self.type_embed(cls_types)
+        
+        # Concatenate all tokens: [CLS, Board, Market, Crystal]
+        # Total: 1 + 100 + 7 + 3 = 111 tokens
+        all_tokens = torch.cat([cls_tokens, board_tokens, market_tokens, crystal_tokens], dim=1)
+        
+        # Apply transformer layers
+        for layer in self.transformer_layers:
+            all_tokens = layer(all_tokens)
+        
+        # Extract CLS token and mean of other tokens
+        cls_output = all_tokens[:, 0, :]  # (B, E)
+        mean_output = all_tokens[:, 1:, :].mean(dim=1)  # (B, E)
+        
+        # Combine and project
+        combined = torch.cat([cls_output, mean_output], dim=1)  # (B, 2E)
+        features = self.output_proj(combined)  # (B, hidden_size)
+        
+        return features
+    
+    def decode_actions(self, hidden):
+        action = self.actor(hidden)
+        value = self.value_fn(hidden)
+        return action, value
+
+
+class RymdboardLSTM(pufferlib.models.LSTMWrapper):
+    """LSTM wrapper for Rymdboard transformer policy."""
+    def __init__(self, env, policy, input_size=256, hidden_size=256):
+        super().__init__(env, policy, input_size, hidden_size)
