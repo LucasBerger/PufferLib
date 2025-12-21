@@ -53,7 +53,7 @@ class Rymdboard(pufferlib.PufferEnv):
         self.single_observation_space = gymnasium.spaces.Box(
             low=0.0,
             high=1.0,
-            shape=(OBS_TOTAL_SIZE,),
+            shape=(OBS_TOTAL_SIZE + NUM_ACTIONS,),
             dtype=np.float32
         )
         self.single_action_space = gymnasium.spaces.Discrete(NUM_ACTIONS)

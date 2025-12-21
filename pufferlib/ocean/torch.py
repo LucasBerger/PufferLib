@@ -1117,14 +1117,14 @@ class Rymdboard(nn.Module):
         board_tokens = board_tokens + self.type_embed(board_types)
         
         # Embed market tokens (7 cards, each with 30 features)
-        market_tokens = market_obs.view(batch_size, self.num_cards, self.card_features)  # (B, 7, 30)
+        market_tokens = market_obs.reshape(batch_size, self.num_cards, self.card_features)  # (B, 7, 30)
         market_tokens = self.market_embed(market_tokens)  # (B, 7, E)
         market_tokens = market_tokens + self.market_pos_embed
         market_types = torch.ones(batch_size, 7, dtype=torch.long, device=device)
         market_tokens = market_tokens + self.type_embed(market_types)
         
         # Embed crystal tokens (3 crystals, each with 4 features)
-        crystal_tokens = crystal_obs.view(batch_size, self.num_crystals, self.crystal_features)  # (B, 3, 4)
+        crystal_tokens = crystal_obs.reshape(batch_size, self.num_crystals, self.crystal_features)  # (B, 3, 4)
         crystal_tokens = self.crystal_embed(crystal_tokens)  # (B, 3, E)
         crystal_types = torch.full((batch_size, 3), 2, dtype=torch.long, device=device)
         crystal_tokens = crystal_tokens + self.type_embed(crystal_types)
@@ -1162,3 +1162,140 @@ class RymdboardLSTM(pufferlib.models.LSTMWrapper):
     """LSTM wrapper for Rymdboard transformer policy."""
     def __init__(self, env, policy, input_size=256, hidden_size=256):
         super().__init__(env, policy, input_size, hidden_size)
+
+
+class SpatialCardEncoder(nn.Module):
+    """Encodes the 5x5 shape of a market card using a tiny CNN."""
+    def __init__(self, embed_dim):
+        super().__init__()
+        # Input: 1 channel (shape mask), 5x5 grid
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        self.fc = nn.Linear(32 * 5 * 5 + 3, embed_dim) # +3 for metadata (is_building, points, num_cells)
+
+    def forward(self, card_obs):
+        # card_obs: [Batch, 7 cards, 30 features]
+        B, N, F_dim = card_obs.shape
+        
+        # Slice out features
+        # [0] = is_building, [1] = points, [2] = num_cells
+        metadata = card_obs[:, :, :3] 
+        
+        # [3:28] = 25 floats representing 5x5 grid
+        shapes = card_obs[:, :, 3:28].reshape(B * N, 1, 5, 5) 
+        
+        # CNN Pass on shapes
+        x = F.relu(self.conv1(shapes))
+        x = F.relu(self.conv2(x))
+        x = x.view(B, N, -1) # Flatten spatial dims
+        
+        # Concatenate metadata and project
+        x = torch.cat([x, metadata], dim=2)
+        return self.fc(x)
+
+class RymdboardHybridPolicy(nn.Module):
+    def __init__(
+        self, 
+        env, 
+        embed_dim=128,
+        num_heads=4,
+        num_layers=2, # Reduced layers as CNN does heavy lifting
+        hidden_size=256,
+        **kwargs
+    ):
+        super().__init__()
+        self.board_size = 100
+        self.market_size = 210
+        self.crystal_size = 12
+        
+        # --- 1. Board Encoder (Spatial) ---
+        # We unpack the single float back into discrete categories
+        self.type_embed = nn.Embedding(5, 32) # Empty, Street, Extraction, Base, Crystal
+        self.owner_embed = nn.Embedding(2, 16) # Neutral, Player
+        
+        # CNN to process the 10x10 board naturally
+        self.board_cnn = nn.Sequential(
+            nn.Conv2d(32+16, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, embed_dim, kernel_size=3, padding=1),
+            nn.ReLU()
+            # Output: [B, embed_dim, 10, 10] -> which we treat as 100 tokens of size embed_dim
+        )
+
+        # --- 2. Market Encoder (Spatial) ---
+        self.market_encoder = SpatialCardEncoder(embed_dim)
+        
+        # --- 3. Transformer Backbone ---
+        # We fuse Board (100 tokens) + Market (7 tokens)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads, batch_first=True)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # --- 4. Heads ---
+        self.actor = pufferlib.pytorch.layer_init(nn.Linear(embed_dim, env.single_action_space.n), std=0.01)
+        self.value_fn = pufferlib.pytorch.layer_init(nn.Linear(embed_dim, 1), std=1.0)
+
+    def forward(self, observations, state=None):
+        # We need to handle the PufferLib signature. 
+        # Check if observations is a tuple (obs, mask) or just obs
+        action_mask = None
+        if isinstance(observations, tuple):
+             observations, action_mask = observations
+        elif observations.shape[-1] > 322:
+             action_mask = observations[:, 322:]
+             observations = observations[:, :322]
+        
+        # --- Preprocessing ---
+        device = observations.device
+        B = observations.shape[0]
+        
+        # Split Obs
+        board_obs = observations[:, :100]
+        market_obs = observations[:, 100:310].reshape(B, 7, 30)
+        
+        # --- 1. Process Board (Reverse Engineering C-Code) ---
+        # Reversing: val = obs * 14.0
+        # Logic: if val >= 10: owner=1, val-=10. else owner=0.
+        raw_board = (board_obs * 14.0).round().long()
+        
+        # Extract ownership (>= 10 means owned)
+        ownership = (raw_board >= 10).long()
+        tile_type = raw_board % 10
+        
+        # Embed and shape to (B, C, H, W)
+        emb_type = self.type_embed(tile_type).transpose(1, 2).view(B, 32, 10, 10)
+        emb_owner = self.owner_embed(ownership).transpose(1, 2).view(B, 16, 10, 10)
+        cnn_in = torch.cat([emb_type, emb_owner], dim=1)
+        
+        # CNN Pass
+        board_features = self.board_cnn(cnn_in) # (B, 128, 10, 10)
+        board_tokens = board_features.flatten(2).transpose(1, 2) # (B, 100, 128)
+        
+        # --- 2. Process Market ---
+        market_tokens = self.market_encoder(market_obs) # (B, 7, 128)
+        
+        # --- 3. Fusion (Transformer) ---
+        # Concatenate: [Board Tokens (100) | Market Tokens (7)]
+        all_tokens = torch.cat([board_tokens, market_tokens], dim=1)
+        
+        # Self-Attention
+        hidden = self.transformer(all_tokens)
+        
+        # Pooling (Global Max Pool usually works better than Mean for games)
+        pooled = torch.max(hidden, dim=1)[0]
+        
+        # --- 4. Output ---
+        actions = self.actor(pooled)
+        value = self.value_fn(pooled)
+        
+        # --- CRITICAL: Action Masking ---
+        if action_mask is not None:
+            # Set invalid actions to a very large negative number
+            actions = actions.masked_fill(action_mask == 0, -1e9)
+            
+        return actions, value
+    
+    def forward_train(self, x, state=None):
+        return self.forward(x, state)
+
+    def forward_eval(self, observations, state=None):
+        return self.forward(observations, state)

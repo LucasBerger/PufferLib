@@ -517,7 +517,8 @@ static int decode_action(int action, int* card_idx, int* x, int* y, int* rotatio
 #define OBS_BOARD_SIZE 100
 #define OBS_MARKET_SIZE 210  // 7 cards * 30 features each
 #define OBS_CRYSTAL_SIZE 12
-#define OBS_TOTAL_SIZE (OBS_BOARD_SIZE + OBS_MARKET_SIZE + OBS_CRYSTAL_SIZE)
+#define OBS_REAL_SIZE (OBS_BOARD_SIZE + OBS_MARKET_SIZE + OBS_CRYSTAL_SIZE)
+#define OBS_TOTAL_SIZE (OBS_REAL_SIZE + NUM_ACTIONS)
 
 static void fill_observation(Rymdboard* env) {
     int idx = 0;
@@ -577,6 +578,45 @@ static void fill_observation(Rymdboard* env) {
         env->observations[idx++] = env->crystals[i].y / (float)(BOARD_SIZE - 1);
         env->observations[idx++] = env->crystals[i].connected ? 1.0f : 0.0f;
         env->observations[idx++] = env->crystals[i].amount / 10.0f;
+    }
+
+    // Action mask: 2800 values (1.0 for valid, 0.0 for invalid)
+    // action = card_idx * 400 + x * 40 + y * 4 + rotation
+    
+    // Pre-calculate rotated shapes for all 7 cards in the market
+    int rotated_shapes[TOTAL_MARKET_SLOTS][4][MAX_SHAPE_SIZE][2];
+    int num_cells[TOTAL_MARKET_SLOTS];
+
+    for (int c = 0; c < TOTAL_MARKET_SLOTS; c++) {
+        Card* card = (c < NUM_BUILDING_SLOTS) 
+            ? &env->building_market[c] 
+            : &env->street_market[c - NUM_BUILDING_SLOTS];
+        
+        num_cells[c] = card->shape.num_cells;
+        int raw_shape[MAX_SHAPE_SIZE][2];
+        for (int i = 0; i < card->shape.num_cells; i++) {
+            raw_shape[i][0] = card->shape.cells[i][0];
+            raw_shape[i][1] = card->shape.cells[i][1];
+        }
+        
+        for (int r = 0; r < 4; r++) {
+            rotate_shape(raw_shape, card->shape.num_cells, r, rotated_shapes[c][r]);
+        }
+    }
+
+    for (int card_idx = 0; card_idx < TOTAL_MARKET_SLOTS; card_idx++) {
+        for (int x = 0; x < BOARD_SIZE; x++) {
+            for (int y = 0; y < BOARD_SIZE; y++) {
+                for (int r = 0; r < 4; r++) {
+                    int valid = 0;
+                    if (can_place_tile(env, x, y, rotated_shapes[card_idx][r], num_cells[card_idx]) &&
+                        is_connected_to_network(env, x, y, rotated_shapes[card_idx][r], num_cells[card_idx])) {
+                        valid = 1;
+                    }
+                    env->observations[idx++] = (float)valid;
+                }
+            }
+        }
     }
 }
 
