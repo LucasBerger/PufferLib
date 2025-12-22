@@ -96,6 +96,7 @@ typedef struct {
     int street_deck[21];    // Same for streets
     int building_deck_size;
     int street_deck_size;
+    int last_total_distance;
     
     // Crystal nodes
     CrystalNode crystals[NUM_CRYSTALS];
@@ -639,6 +640,7 @@ void c_reset(Rymdboard* env) {
     memset(env->board_owner, 0, BOARD_TILES);
     memset(env->board_structure, TILE_EMPTY, BOARD_TILES);
     memset(env->board_feature, TILE_EMPTY, BOARD_TILES);
+    env->last_total_distance = 0;
     
     // Increment reset counter and update RNG state for variety
     env->reset_count++;
@@ -767,11 +769,35 @@ void c_step(Rymdboard* env) {
     env->valid_placements++;
     env->rewards[0] += REWARD_VALID_PLACEMENT;
     
-    // Distance reward
-    float curr_dist = get_min_distance_to_crystals(env);
-    if (curr_dist < prev_dist) {
-        env->rewards[0] += REWARD_DISTANCE_SCALE * (prev_dist - curr_dist);
+    // 1. Calculate Sum of Manhattan Distances to all unconnected crystals
+    float current_total_dist = 0;
+    int active_crystals = 0;
+    for (int i = 0; i < NUM_CRYSTALS; i++) {
+        if (!env->crystals[i].connected) {
+            // Find the closest player tile to THIS specific crystal
+            float min_dist_to_this_crystal = 20.0f; // Max board distance
+            for (int idx = 0; idx < BOARD_TILES; idx++) {
+                if (env->board_owner[idx] == 1) {
+                    int px = idx % BOARD_SIZE;
+                    int py = idx / BOARD_SIZE;
+                    int d = abs(px - env->crystals[i].x) + abs(py - env->crystals[i].y);
+                    if (d < min_dist_to_this_crystal) min_dist_to_this_crystal = (float)d;
+                }
+            }
+            current_total_dist += min_dist_to_this_crystal;
+            active_crystals++;
+        }
     }
+
+    // 2. Reward for reducing the total distance gap
+    // If prev_total_dist was 15 and current is 14, reward the difference
+    if (active_crystals > 0) {
+        float distance_improvement = env->last_total_distance - current_total_dist;
+        if (distance_improvement > 0) {
+            env->rewards[0] += (distance_improvement * REWARD_DISTANCE_SCALE);
+        }
+    }
+    env->last_total_distance = current_total_dist;
     
     // Connection reward
     int curr_connected = count_connected_crystals(env);
