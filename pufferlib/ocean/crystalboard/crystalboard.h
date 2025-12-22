@@ -681,7 +681,7 @@ void c_step(Crystalboard* env) {
         add_log(env);
         if (env->render_mode) {
             c_render(env);
-            WaitTime(3.0f * (float)env->frameskip / 60.0f);
+            WaitTime(4.0f);
         }
         c_reset(env);
         return;
@@ -709,7 +709,7 @@ void c_step(Crystalboard* env) {
         add_log(env);
         if (env->render_mode) {
             c_render(env);
-            WaitTime(3.0f * (float)env->frameskip / 60.0f);
+            WaitTime(4.0f);
         }
         c_reset(env);
         return;
@@ -738,7 +738,7 @@ void c_step(Crystalboard* env) {
         add_log(env);
         if (env->render_mode) {
             c_render(env);
-            WaitTime(3.0f * (float)env->frameskip / 60.0f);
+            WaitTime(4.0f);
         }
         c_reset(env);
         return;
@@ -754,7 +754,7 @@ void c_step(Crystalboard* env) {
         add_log(env);
         if (env->render_mode) {
             c_render(env);
-            WaitTime(3.0f * (float)env->frameskip / 60.0f);
+            WaitTime(4.0f);
         }
         c_reset(env);
         return;
@@ -816,7 +816,7 @@ void c_step(Crystalboard* env) {
         add_log(env);
         if (env->render_mode) {
             c_render(env);
-            WaitTime(3.0f * (float)env->frameskip / 60.0f);
+            WaitTime(4.0f);
         }
         c_reset(env);
         return;
@@ -829,7 +829,7 @@ void c_step(Crystalboard* env) {
         add_log(env);
         if (env->render_mode) {
             c_render(env);
-            sleep(1);
+            WaitTime(4.0f);
         }
         c_reset(env);
         return;
@@ -1017,7 +1017,7 @@ void c_draw_internal(Crystalboard* env) {
 void c_render(Crystalboard* env) {
     if (!IsWindowReady()) {
         InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Crystalboard - PufferLib Ocean");
-        SetTargetFPS(60 / env->frameskip);
+        SetTargetFPS(60);
     }
     
     if (IsKeyDown(KEY_ESCAPE)) {
@@ -1124,4 +1124,3 @@ static void print_help(void) {
     printf("\nCards: 0-3 = buildings (extraction), 4-6 = streets\n");
     printf("Rotations: 0-3 (90 degree increments)\n\n");
 }
-
