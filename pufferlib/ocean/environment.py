@@ -159,7 +159,7 @@ MAKE_FUNCTIONS = {
     'onestateworld': 'World',
     'onlyfish': 'OnlyFish',
     'chain_mdp': 'Chain',
-    'rymdboard': 'Rymdboard',
+    'crystalboard': 'Crystalboard',
     'spaces': make_spaces,
     'multiagent': make_multiagent,
     'slimevolley': 'SlimeVolley',

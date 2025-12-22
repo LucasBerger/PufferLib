@@ -966,10 +966,10 @@ class G2048(nn.Module):
 
 
 # ============================================================================
-# Rymdboard Transformer Policy
+# Crystalboard Transformer Policy
 # ============================================================================
 
-class RymdboardTransformerBlock(nn.Module):
+class CrystalboardTransformerBlock(nn.Module):
     """A single transformer encoder block with multi-head self-attention."""
     
     def __init__(self, embed_dim=128, num_heads=4, ff_dim=256, dropout=0.1):
@@ -998,9 +998,9 @@ class RymdboardTransformerBlock(nn.Module):
         return x
 
 
-class Rymdboard(nn.Module):
+class Crystalboard(nn.Module):
     """
-    Transformer-based policy for Rymdboard tile-placement game.
+    Transformer-based policy for Crystalboard tile-placement game.
     
     Observation format (322 floats from C environment):
     - Board: 100 floats (normalized tile type + ownership per cell)
@@ -1027,7 +1027,7 @@ class Rymdboard(nn.Module):
         self.is_continuous = False
         self.embed_dim = embed_dim
         
-        # Observation dimensions (must match rymdboard.h)
+        # Observation dimensions (must match crystalboard.h)
         self.board_size = 100
         self.market_size = 210  # 7 cards × 30 features
         self.crystal_size = 12  # 3 crystals × 4 features
@@ -1055,7 +1055,7 @@ class Rymdboard(nn.Module):
         
         # Transformer encoder layers
         self.transformer_layers = nn.ModuleList([
-            RymdboardTransformerBlock(embed_dim, num_heads, ff_dim, dropout)
+            CrystalboardTransformerBlock(embed_dim, num_heads, ff_dim, dropout)
             for _ in range(num_layers)
         ])
         
@@ -1167,8 +1167,8 @@ class Rymdboard(nn.Module):
         return action, value
 
 
-class RymdboardLSTM(pufferlib.models.LSTMWrapper):
-    """LSTM wrapper for Rymdboard transformer policy."""
+class CrystalboardLSTM(pufferlib.models.LSTMWrapper):
+    """LSTM wrapper for Crystalboard transformer policy."""
     def __init__(self, env, policy, input_size=256, hidden_size=256):
         super().__init__(env, policy, input_size, hidden_size)
 
@@ -1202,7 +1202,7 @@ class SpatialCardEncoder(nn.Module):
         x = torch.cat([x, metadata], dim=2)
         return self.fc(x)
 
-class RymdboardHybridPolicy(nn.Module):
+class CrystalboardHybridPolicy(nn.Module):
     def __init__(
         self, 
         env, 

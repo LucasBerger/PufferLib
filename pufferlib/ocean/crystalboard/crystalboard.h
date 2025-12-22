@@ -1,4 +1,4 @@
-/* Rymdboard: A tile-placement game environment for PufferLib Ocean
+/* Crystalboard: A tile-placement game environment for PufferLib Ocean
  * 
  * The goal is to connect crystal nodes on a 10x10 grid by placing
  * streets and extraction buildings from a market of 7 cards.
@@ -115,7 +115,7 @@ typedef struct {
 
     int frameskip;
     int render_mode;
-} Rymdboard;
+} Crystalboard;
 
 // Reward constants (from research/reward_constants.py)
 // Invalid moves now terminate the episode, so penalty doesn't need to be extreme
@@ -154,11 +154,11 @@ static const int SHAPE_BASE[4][2] = {{0,0}, {1,0}, {0,1}, {1,1}};
 static const int SHAPE_BASE_SIZE = 4;
 
 // Function declarations
-void add_log(Rymdboard* env);
-void c_reset(Rymdboard* env);
-void c_step(Rymdboard* env);
-void c_render(Rymdboard* env);
-void c_close(Rymdboard* env);
+void add_log(Crystalboard* env);
+void c_reset(Crystalboard* env);
+void c_step(Crystalboard* env);
+void c_render(Crystalboard* env);
+void c_close(Crystalboard* env);
 
 // Helper function forward declarations (only those needed before definition)
 static void rotate_shape(const int shape[][2], int num_cells, int rotation, int out_shape[][2]);
@@ -195,7 +195,7 @@ static void copy_shape(Card* card, int shape_idx) {
 }
 
 // Initialize card decks - multiple copies of each shape as in default_content.py
-static void init_card_decks(Rymdboard* env) {
+static void init_card_decks(Crystalboard* env) {
     // Building deck: 3 copies of each of the 7 shapes = 21 cards
     env->building_deck_size = 21;
     int deck_idx = 0;
@@ -252,7 +252,7 @@ static void draw_random_card(Card* card, int* deck, int* deck_size, int is_build
     }
 }
 
-static void replace_used_card(Rymdboard* env, int card_idx) {
+static void replace_used_card(Crystalboard* env, int card_idx) {
     if (card_idx < NUM_BUILDING_SLOTS) {
         // Replace building card
         draw_random_card(&env->building_market[card_idx], env->building_deck,
@@ -265,7 +265,7 @@ static void replace_used_card(Rymdboard* env, int card_idx) {
     }
 }
 
-static void init_decks(Rymdboard* env) {
+static void init_decks(Crystalboard* env) {
     // Initialize the card decks
     init_card_decks(env);
 
@@ -285,7 +285,7 @@ static void init_decks(Rymdboard* env) {
     }
 }
 
-static void place_start_base(Rymdboard* env) {
+static void place_start_base(Crystalboard* env) {
     // Place 2x2 start base at position (1, 1)
     int x = 1, y = 1;
     for (int i = 0; i < SHAPE_BASE_SIZE; i++) {
@@ -297,7 +297,7 @@ static void place_start_base(Rymdboard* env) {
     }
 }
 
-static void place_crystal_nodes(Rymdboard* env) {
+static void place_crystal_nodes(Crystalboard* env) {
     // Place crystal nodes in 3 quadrants (excluding top-left where base is)
     // Top-right: x=[5,9], y=[0,4]
     // Bottom-left: x=[0,4], y=[5,9]
@@ -364,7 +364,7 @@ static void rotate_shape(const int shape[][2], int num_cells, int rotation, int 
     }
 }
 
-static int can_place_tile(Rymdboard* env, int x, int y, int shape[][2], int num_cells) {
+static int can_place_tile(Crystalboard* env, int x, int y, int shape[][2], int num_cells) {
     // Check bounds and overlap
     for (int i = 0; i < num_cells; i++) {
         int bx = x + shape[i][0];
@@ -391,7 +391,7 @@ static int can_place_tile(Rymdboard* env, int x, int y, int shape[][2], int num_
     return 1;
 }
 
-static int is_connected_to_network(Rymdboard* env, int x, int y, int shape[][2], int num_cells) {
+static int is_connected_to_network(Crystalboard* env, int x, int y, int shape[][2], int num_cells) {
     // Check if any cell of the shape is adjacent to player's street or base
     int dx[] = {0, 0, 1, -1};
     int dy[] = {1, -1, 0, 0};
@@ -423,7 +423,7 @@ static int is_connected_to_network(Rymdboard* env, int x, int y, int shape[][2],
     return 0;
 }
 
-static void place_tile(Rymdboard* env, int x, int y, int shape[][2], int num_cells, int tile_type) {
+static void place_tile(Crystalboard* env, int x, int y, int shape[][2], int num_cells, int tile_type) {
     for (int i = 0; i < num_cells; i++) {
         int bx = x + shape[i][0];
         int by = y + shape[i][1];
@@ -434,7 +434,7 @@ static void place_tile(Rymdboard* env, int x, int y, int shape[][2], int num_cel
     }
 }
 
-static int count_connected_crystals(Rymdboard* env) {
+static int count_connected_crystals(Crystalboard* env) {
     int count = 0;
     int dx[] = {0, 0, 1, -1};
     int dy[] = {1, -1, 0, 0};
@@ -466,7 +466,7 @@ static int count_connected_crystals(Rymdboard* env) {
     return count;
 }
 
-static float get_min_distance_to_crystals(Rymdboard* env) {
+static float get_min_distance_to_crystals(Crystalboard* env) {
     float min_dist = 20.0f;
     
     // Find all player tiles
@@ -521,7 +521,7 @@ static int decode_action(int action, int* card_idx, int* x, int* y, int* rotatio
 #define OBS_REAL_SIZE (OBS_BOARD_SIZE + OBS_MARKET_SIZE + OBS_CRYSTAL_SIZE)
 #define OBS_TOTAL_SIZE (OBS_REAL_SIZE + NUM_ACTIONS)
 
-static void fill_observation(Rymdboard* env) {
+static void fill_observation(Crystalboard* env) {
     int idx = 0;
     
     // Board observation: encode structure type (0-4) as float
@@ -625,7 +625,7 @@ static void fill_observation(Rymdboard* env) {
     }
 }
 
-void add_log(Rymdboard* env) {
+void add_log(Crystalboard* env) {
     env->log.perf += (env->crystals_connected >= 2) ? 1.0f : 0.0f;
     env->log.score += (float)env->crystals_connected;
     env->log.episode_length += (float)env->tick;
@@ -635,7 +635,7 @@ void add_log(Rymdboard* env) {
     env->log.n++;
 }
 
-void c_reset(Rymdboard* env) {
+void c_reset(Crystalboard* env) {
     // Clear board
     memset(env->board_owner, 0, BOARD_TILES);
     memset(env->board_structure, TILE_EMPTY, BOARD_TILES);
@@ -662,7 +662,7 @@ void c_reset(Rymdboard* env) {
     fill_observation(env);
 }
 
-void c_step(Rymdboard* env) {
+void c_step(Crystalboard* env) {
     env->tick++;
     
     int action = env->actions[0];
@@ -884,9 +884,9 @@ static void draw_shape_preview(int x, int y, Card* card, int rotation, Color col
     }
 }
 
-void c_render(Rymdboard* env) {
+void c_render(Crystalboard* env) {
     if (!IsWindowReady()) {
-        InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Rymdboard - PufferLib Ocean");
+        InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Crystalboard - PufferLib Ocean");
         SetTargetFPS(60 / env->frameskip);
     }
     
@@ -1029,7 +1029,7 @@ void c_render(Rymdboard* env) {
     EndDrawing();
 }
 
-void c_close(Rymdboard* env) {
+void c_close(Crystalboard* env) {
     if (IsWindowReady()) {
         CloseWindow();
     }
@@ -1039,7 +1039,7 @@ void c_close(Rymdboard* env) {
 // Console helpers for interactive play
 // ============================================================================
 
-static void print_board(Rymdboard* env) {
+static void print_board(Crystalboard* env) {
     printf("\n   ");
     for (int x = 0; x < BOARD_SIZE; x++) {
         printf(" %d", x);
@@ -1081,7 +1081,7 @@ static void print_board(Rymdboard* env) {
     printf("\n");
 }
 
-static void print_market(Rymdboard* env) {
+static void print_market(Crystalboard* env) {
     printf("=== MARKET ===\n");
     printf("Buildings (0-3):\n");
     for (int i = 0; i < NUM_BUILDING_SLOTS; i++) {
@@ -1104,7 +1104,7 @@ static void print_market(Rymdboard* env) {
     printf("\n");
 }
 
-static void print_crystals(Rymdboard* env) {
+static void print_crystals(Crystalboard* env) {
     printf("=== CRYSTALS (%d connected) ===\n", env->crystals_connected);
     for (int i = 0; i < NUM_CRYSTALS; i++) {
         printf("  Crystal %d: (%d, %d) - %s\n", 

@@ -1,4 +1,4 @@
-"""Rymdboard: A tile-placement game environment for PufferLib Ocean.
+"""Crystalboard: A tile-placement game environment for PufferLib Ocean.
 
 The goal is to connect crystal nodes on a 10x10 grid by placing
 streets and extraction buildings from a market of 7 cards.
@@ -11,10 +11,10 @@ import gymnasium
 import numpy as np
 
 import pufferlib
-from pufferlib.ocean.rymdboard import binding
+from pufferlib.ocean.crystalboard import binding
 
 
-# Observation dimensions (must match rymdboard.h)
+# Observation dimensions (must match crystalboard.h)
 BOARD_SIZE = 10
 BOARD_TILES = BOARD_SIZE * BOARD_SIZE
 OBS_BOARD_SIZE = 100
@@ -25,8 +25,8 @@ NUM_ACTIONS = 2800   # 7 cards * 10 * 10 * 4
 OBS_TOTAL_SIZE = OBS_REAL_SIZE + NUM_ACTIONS
 
 
-class Rymdboard(pufferlib.PufferEnv):
-    """Rymdboard environment using C backend for fast vectorized simulation."""
+class Crystalboard(pufferlib.PufferEnv):
+    """Crystalboard environment using C backend for fast vectorized simulation."""
     
     def __init__(
         self,
@@ -38,7 +38,7 @@ class Rymdboard(pufferlib.PufferEnv):
         frameskip=1,
         seed=0,
     ):
-        """Initialize Rymdboard environment.
+        """Initialize Crystalboard environment.
         
         Args:
             num_envs: Number of parallel environments
@@ -134,10 +134,10 @@ class Rymdboard(pufferlib.PufferEnv):
 
 
 # For compatibility with env_creator in environment.py
-def make_rymdboard(num_envs=1, render_mode=None, log_interval=128,
+def make_crystalboard(num_envs=1, render_mode=None, log_interval=128,
                    max_steps=200, buf=None, seed=0, frameskip=1, **kwargs):
-    """Factory function to create Rymdboard environment."""
-    return Rymdboard(
+    """Factory function to create Crystalboard environment."""
+    return Crystalboard(
         num_envs=num_envs,
         render_mode=render_mode,
         log_interval=log_interval,
@@ -153,7 +153,7 @@ if __name__ == '__main__':
     import time
     
     N = 4096
-    env = Rymdboard(num_envs=N)
+    env = Crystalboard(num_envs=N)
     env.reset()
     steps = 0
     
@@ -167,5 +167,5 @@ if __name__ == '__main__':
         steps += N
         i += 1
     
-    print(f'Rymdboard SPS: {int(steps / (time.time() - start))}')
+    print(f'Crystalboard SPS: {int(steps / (time.time() - start))}')
 

@@ -1,13 +1,13 @@
-/* Rymdboard standalone executable for interactive play and testing.
+/* Crystalboard standalone executable for interactive play and testing.
  * 
- * Build: See scripts/build_ocean.sh rymdboard
- * Run: ./rymdboard
+ * Build: See scripts/build_ocean.sh crystalboard
+ * Run: ./crystalboard
  * 
  * Play interactively by entering: card_idx x y rotation
  * Example: "4 3 3 0" places street card 4 at position (3,3) with rotation 0
  */
 
-#include "rymdboard.h"
+#include "crystalboard.h"
 
 // Allocate buffers for standalone mode
 static float observations[OBS_TOTAL_SIZE];
@@ -15,11 +15,11 @@ static int actions[1];
 static float rewards[1];
 static unsigned char terminals[1];
 
-void play_interactive(Rymdboard* env) {
+void play_interactive(Crystalboard* env) {
     char input[256];
     
     printf("\n========================================\n");
-    printf("       RYMDBOARD - Interactive Mode      \n");
+    printf("       CRYSTALBOARD - Interactive Mode      \n");
     printf("========================================\n\n");
     
     print_help();
@@ -104,7 +104,7 @@ void play_interactive(Rymdboard* env) {
     }
 }
 
-void play_with_render(Rymdboard* env) {
+void play_with_render(Crystalboard* env) {
     int selected_card = 0;
     int cursor_x = BOARD_SIZE / 2;
     int cursor_y = BOARD_SIZE / 2;
@@ -186,7 +186,7 @@ void play_with_render(Rymdboard* env) {
 
 int main(int argc, char* argv[]) {
     // Initialize environment
-    Rymdboard env = {0};
+    Crystalboard env = {0};
     env.observations = observations;
     env.actions = actions;
     env.rewards = rewards;
@@ -208,11 +208,11 @@ int main(int argc, char* argv[]) {
     
     if (render_mode) {
         env.render_mode = 1;
-        printf("Starting Rymdboard with graphical rendering...\n");
+        printf("Starting Crystalboard with graphical rendering...\n");
         printf("Controls: 0-6 select card, WASD/arrows move, Q/E rotate, Space place, R reset\n");
         play_with_render(&env);
     } else {
-        printf("Starting Rymdboard in console mode...\n");
+        printf("Starting Crystalboard in console mode...\n");
         printf("Use '--render' or '-r' flag for graphical mode\n\n");
         play_interactive(&env);
     }
