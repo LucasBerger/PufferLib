@@ -158,6 +158,7 @@ void add_log(Crystalboard* env);
 void c_reset(Crystalboard* env);
 void c_step(Crystalboard* env);
 void c_render(Crystalboard* env);
+void c_draw_internal(Crystalboard* env);
 void c_close(Crystalboard* env);
 
 // Helper function forward declarations (only those needed before definition)
@@ -884,19 +885,7 @@ static void draw_shape_preview(int x, int y, Card* card, int rotation, Color col
     }
 }
 
-void c_render(Crystalboard* env) {
-    if (!IsWindowReady()) {
-        InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Crystalboard - PufferLib Ocean");
-        SetTargetFPS(60 / env->frameskip);
-    }
-    
-    if (IsKeyDown(KEY_ESCAPE)) {
-        exit(0);
-    }
-    
-    BeginDrawing();
-    ClearBackground(PUFF_BACKGROUND);
-    
+void c_draw_internal(Crystalboard* env) {
     // Draw grid
     for (int i = 0; i <= BOARD_SIZE; i++) {
         // Vertical lines
@@ -1011,21 +1000,33 @@ void c_render(Crystalboard* env) {
     DrawText("Enter: card x y rot (e.g. '4 3 3 0')", 10, info_y + 20, 12, PUFF_CYAN);
     DrawText("ESC: quit | R: reset", 10, info_y + 35, 12, PUFF_CYAN);
     
-    DrawText("ESC: quit | R: reset", 10, info_y + 35, 12, PUFF_CYAN);
-    
     // Draw last action
     int action = env->actions[0];
     int rot = action % 4;
     int rem = action / 4;
-    int y = rem % 10;
+    int y_coord = rem % 10;
     rem = rem / 10;
-    int x = rem % 10;
+    int x_coord = rem % 10;
     int card_idx = rem / 10;
     
     char action_buf[64];
-    snprintf(action_buf, sizeof(action_buf), "Action: Card %d at (%d, %d) Rot %d", card_idx, x, y, rot);
+    snprintf(action_buf, sizeof(action_buf), "Action: Card %d at (%d, %d) Rot %d", card_idx, x_coord, y_coord, rot);
     DrawText(action_buf, 10, info_y + 55, 16, PUFF_YELLOW);
+}
+
+void c_render(Crystalboard* env) {
+    if (!IsWindowReady()) {
+        InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Crystalboard - PufferLib Ocean");
+        SetTargetFPS(60 / env->frameskip);
+    }
     
+    if (IsKeyDown(KEY_ESCAPE)) {
+        exit(0);
+    }
+
+    BeginDrawing();
+    ClearBackground(PUFF_BACKGROUND);
+    c_draw_internal(env);
     EndDrawing();
 }
 

@@ -13,6 +13,7 @@
 static float observations[OBS_TOTAL_SIZE];
 static int actions[1];
 static float rewards[1];
+static float total_reward = 0;
 static unsigned char terminals[1];
 
 void play_interactive(Crystalboard* env) {
@@ -29,8 +30,8 @@ void play_interactive(Crystalboard* env) {
         print_market(env);
         print_crystals(env);
         
-        printf("Step %d | Crystals: %d/3 | Last reward: %.2f\n", 
-               env->tick, env->crystals_connected, rewards[0]);
+        printf("Step %d | Crystals: %d/3 | Last reward: %.2f | Total: %.2f\n", 
+               env->tick, env->crystals_connected, rewards[0], total_reward);
         
         if (terminals[0]) {
             printf("\n*** EPISODE ENDED ***\n");
@@ -59,6 +60,7 @@ void play_interactive(Crystalboard* env) {
             printf("Resetting game...\n");
             c_reset(env);
             rewards[0] = 0;
+            total_reward = 0;
             terminals[0] = 0;
             continue;
         }
@@ -91,6 +93,7 @@ void play_interactive(Crystalboard* env) {
                    card_idx, x, y, rotation, actions[0]);
             
             c_step(env);
+            total_reward += rewards[0];
             
             if (rewards[0] > 0) {
                 printf(">>> Valid placement! Reward: %.2f\n", rewards[0]);
@@ -110,11 +113,18 @@ void play_with_render(Crystalboard* env) {
     int cursor_y = BOARD_SIZE / 2;
     int rotation = 0;
     
+    // Initialize window
+    if (!IsWindowReady()) {
+        InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Crystalboard - PufferLib Ocean");
+        SetTargetFPS(60);
+    }
+    
     while (!WindowShouldClose()) {
         // Handle input
         if (IsKeyPressed(KEY_R)) {
             c_reset(env);
             rewards[0] = 0;
+            total_reward = 0;
             terminals[0] = 0;
         }
         
@@ -151,15 +161,17 @@ void play_with_render(Crystalboard* env) {
         if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) {
             actions[0] = encode_action(selected_card, cursor_x, cursor_y, rotation);
             c_step(env);
+            total_reward += rewards[0];
         }
         
-        // Render
-        c_render(env);
+        // Render in a single pass
+        BeginDrawing();
+        ClearBackground(PUFF_BACKGROUND);
+        
+        // Draw the environment state
+        c_draw_internal(env);
         
         // Draw cursor and selection overlay
-        BeginDrawing();
-        
-        // Draw cursor
         int cx = cursor_x * CELL_SIZE;
         int cy = cursor_y * CELL_SIZE;
         DrawRectangleLines(cx, cy, CELL_SIZE, CELL_SIZE, PUFF_WHITE);
@@ -176,8 +188,8 @@ void play_with_render(Crystalboard* env) {
         
         // Draw selection info
         char info[128];
-        snprintf(info, sizeof(info), "Card: %d | Pos: (%d,%d) | Rot: %d | WASD:move Q/E:rotate Space:place", 
-                 selected_card, cursor_x, cursor_y, rotation);
+        snprintf(info, sizeof(info), "Card: %d | Pos: (%d,%d) | Rot: %d | Total Reward: %.2f", 
+                 selected_card, cursor_x, cursor_y, rotation, total_reward);
         DrawText(info, 10, BOARD_SIZE * CELL_SIZE + 55, 12, PUFF_YELLOW);
         
         EndDrawing();
@@ -208,6 +220,7 @@ int main(int argc, char* argv[]) {
     
     if (render_mode) {
         env.render_mode = 1;
+        env.frameskip = 1; // 60 FPS for standalone
         printf("Starting Crystalboard with graphical rendering...\n");
         printf("Controls: 0-6 select card, WASD/arrows move, Q/E rotate, Space place, R reset\n");
         play_with_render(&env);
