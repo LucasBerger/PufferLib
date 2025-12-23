@@ -119,9 +119,9 @@ typedef struct {
 
 // Reward constants (from research/reward_constants.py)
 // Invalid moves now terminate the episode, so penalty doesn't need to be extreme
-#define REWARD_STEP_PENALTY -0.01f
+#define REWARD_STEP_PENALTY -1.0f
 #define REWARD_INVALID_MOVE -1.0f
-#define REWARD_VALID_PLACEMENT 0.5f
+#define REWARD_VALID_PLACEMENT 0.0f
 #define REWARD_DISTANCE_SCALE 0.5f
 #define REWARD_CONNECTION 10.0f
 #define REWARD_WIN_BONUS 50.0f
@@ -627,7 +627,7 @@ static void fill_observation(Crystalboard* env) {
 }
 
 void add_log(Crystalboard* env) {
-    env->log.perf += (env->crystals_connected >= 2) ? 1.0f : 0.0f;
+    env->log.perf += (env->crystals_connected >= 3) ? 1.0f : 0.0f;
     env->log.score += (float)env->crystals_connected;
     env->log.episode_length += (float)env->tick;
     env->log.crystals_connected += (float)env->crystals_connected;
@@ -809,7 +809,7 @@ void c_step(Crystalboard* env) {
     }
     
     // Win condition: 2+ crystals connected
-    if (curr_connected >= 2) {
+    if (curr_connected >= 3) {
         env->rewards[0] += REWARD_WIN_BONUS;
         env->terminals[0] = 1;
         env->log.episode_return += env->rewards[0];
