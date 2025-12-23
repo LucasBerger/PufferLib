@@ -14,17 +14,18 @@
 #include <unistd.h>
 #include "raylib.h"
 
-// Board dimensions
-#define BOARD_SIZE 10
-#define BOARD_TILES (BOARD_SIZE * BOARD_SIZE)
 
-// Market sizes
+// Removed fixed board dimensions
+// #define BOARD_SIZE 10 -- Now dynamic
+// #define BOARD_TILES (BOARD_SIZE * BOARD_SIZE) -- Now dynamic
+
+// Market sizes (still fixed)
 #define NUM_BUILDING_SLOTS 4
 #define NUM_STREET_SLOTS 3
 #define TOTAL_MARKET_SLOTS 7
 
-// Action space: 7 cards × 10 × 10 positions × 4 rotations = 2800
-#define NUM_ACTIONS 2800
+// Action space dependent on grid size: 7 cards * W * H * 4 rotations
+// #define NUM_ACTIONS 2800 -- Now dynamic
 
 // Crystal nodes
 #define NUM_CRYSTALS 3
@@ -83,10 +84,15 @@ typedef struct {
     float* rewards;                   // Reward buffer
     unsigned char* terminals;         // Terminal flag buffer
     
-    // Game state
-    unsigned char board_owner[BOARD_TILES];      // 0=empty, 1=player
-    unsigned char board_structure[BOARD_TILES];  // Tile type
-    unsigned char board_feature[BOARD_TILES];    // Features like crystal nodes
+    // Dynamic Grid Dimensions
+    int width;
+    int height; // We'll assume square for now usually, but good to have both
+    int board_tiles; // width * height
+    
+    // Game state (Dynamic arrays)
+    unsigned char* board_owner;      // 0=empty, 1=player
+    unsigned char* board_structure;  // Tile type
+    unsigned char* board_feature;    // Features like crystal nodes
     
     // Market state - cards are drawn from decks and replaced when used
     Card building_market[NUM_BUILDING_SLOTS];
@@ -287,54 +293,55 @@ static void init_decks(Crystalboard* env) {
 }
 
 static void place_start_base(Crystalboard* env) {
-    // Place 2x2 start base at position (1, 1)
+    // Place 2x2 start base always at (1,1) if possible
     int x = 1, y = 1;
     for (int i = 0; i < SHAPE_BASE_SIZE; i++) {
         int bx = x + SHAPE_BASE[i][0];
         int by = y + SHAPE_BASE[i][1];
-        int idx = by * BOARD_SIZE + bx;
-        env->board_owner[idx] = 1;  // Player owns it
-        env->board_structure[idx] = TILE_START_BASE;
+        if (bx < env->width && by < env->height) {
+            int idx = by * env->width + bx;
+            env->board_owner[idx] = 1;  // Player owns it
+            env->board_structure[idx] = TILE_START_BASE;
+        }
     }
 }
 
 static void place_crystal_nodes(Crystalboard* env) {
     // Place crystal nodes in 3 quadrants (excluding top-left where base is)
-    // Top-right: x=[5,9], y=[0,4]
-    // Bottom-left: x=[0,4], y=[5,9]
-    // Bottom-right: x=[5,9], y=[5,9]
+    // We scale the quadrants based on env->width/height
     
-    // Use rng_state (updated each episode) for variety
+    int half_w = env->width / 2;
+    int half_h = env->height / 2;
     
-    // Top-right
-    env->crystals[0].x = 5 + (xorshift32(&env->rng_state) % 5);
-    env->crystals[0].y = xorshift32(&env->rng_state) % 5;
+    // Top-right: x=[half_w, w-1], y=[0, half_h-1]
+    env->crystals[0].x = half_w + (xorshift32(&env->rng_state) % half_w);
+    env->crystals[0].y = xorshift32(&env->rng_state) % half_h;
     env->crystals[0].amount = 5 + (xorshift32(&env->rng_state) % 2);
     env->crystals[0].connected = 0;
     
-    // Bottom-left
-    env->crystals[1].x = xorshift32(&env->rng_state) % 5;
-    env->crystals[1].y = 5 + (xorshift32(&env->rng_state) % 5);
+    // Bottom-left: x=[0, half_w-1], y=[half_h, h-1]
+    env->crystals[1].x = xorshift32(&env->rng_state) % half_w;
+    env->crystals[1].y = half_h + (xorshift32(&env->rng_state) % half_h);
     env->crystals[1].amount = 5 + (xorshift32(&env->rng_state) % 2);
     env->crystals[1].connected = 0;
     
-    // Bottom-right
-    env->crystals[2].x = 5 + (xorshift32(&env->rng_state) % 5);
-    env->crystals[2].y = 5 + (xorshift32(&env->rng_state) % 5);
+    // Bottom-right: x=[half_w, w-1], y=[half_h, h-1]
+    env->crystals[2].x = half_w + (xorshift32(&env->rng_state) % half_w);
+    env->crystals[2].y = half_h + (xorshift32(&env->rng_state) % half_h);
     env->crystals[2].amount = 5 + (xorshift32(&env->rng_state) % 2);
     env->crystals[2].connected = 0;
     
     // Place on board feature grid
     for (int i = 0; i < NUM_CRYSTALS; i++) {
-        int idx = env->crystals[i].y * BOARD_SIZE + env->crystals[i].x;
-        env->board_feature[idx] = TILE_CRYSTAL_NODE;
+        int idx = env->crystals[i].y * env->width + env->crystals[i].x;
+        if (idx < env->board_tiles) {
+             env->board_feature[idx] = TILE_CRYSTAL_NODE;
+        }
     }
 }
 
 static void rotate_shape(const int shape[][2], int num_cells, int rotation, int out_shape[][2]) {
     // Rotate shape 90 degrees clockwise 'rotation' times
-    // (x, y) -> (y, -x) per rotation, then normalize
-    
     int temp[MAX_SHAPE_SIZE][2];
     
     // Copy input
@@ -372,11 +379,11 @@ static int can_place_tile(Crystalboard* env, int x, int y, int shape[][2], int n
         int by = y + shape[i][1];
         
         // Check bounds
-        if (bx < 0 || bx >= BOARD_SIZE || by < 0 || by >= BOARD_SIZE) {
+        if (bx < 0 || bx >= env->width || by < 0 || by >= env->height) {
             return 0;
         }
         
-        int idx = by * BOARD_SIZE + bx;
+        int idx = by * env->width + bx;
         
         // Check overlap with existing structures
         if (env->board_owner[idx] != 0) {
@@ -405,11 +412,11 @@ static int is_connected_to_network(Crystalboard* env, int x, int y, int shape[][
             int nx = bx + dx[d];
             int ny = by + dy[d];
             
-            if (nx < 0 || nx >= BOARD_SIZE || ny < 0 || ny >= BOARD_SIZE) {
+            if (nx < 0 || nx >= env->width || ny < 0 || ny >= env->height) {
                 continue;
             }
             
-            int idx = ny * BOARD_SIZE + nx;
+            int idx = ny * env->width + nx;
             
             // Must be owned by player and be street or base
             if (env->board_owner[idx] == 1) {
@@ -428,7 +435,7 @@ static void place_tile(Crystalboard* env, int x, int y, int shape[][2], int num_
     for (int i = 0; i < num_cells; i++) {
         int bx = x + shape[i][0];
         int by = y + shape[i][1];
-        int idx = by * BOARD_SIZE + bx;
+        int idx = by * env->width + bx;
         
         env->board_owner[idx] = 1;  // Player owns
         env->board_structure[idx] = tile_type;
@@ -449,11 +456,11 @@ static int count_connected_crystals(Crystalboard* env) {
             int nx = cx + dx[d];
             int ny = cy + dy[d];
             
-            if (nx < 0 || nx >= BOARD_SIZE || ny < 0 || ny >= BOARD_SIZE) {
+            if (nx < 0 || nx >= env->width || ny < 0 || ny >= env->height) {
                 continue;
             }
             
-            int idx = ny * BOARD_SIZE + nx;
+            int idx = ny * env->width + nx;
             
             if (env->board_owner[idx] == 1 &&
                 env->board_structure[idx] == TILE_EXTRACTION_BUILDING) {
@@ -468,12 +475,12 @@ static int count_connected_crystals(Crystalboard* env) {
 }
 
 static float get_min_distance_to_crystals(Crystalboard* env) {
-    float min_dist = 20.0f;
+    float min_dist = (float)(env->width + env->height);
     
     // Find all player tiles
-    for (int y = 0; y < BOARD_SIZE; y++) {
-        for (int x = 0; x < BOARD_SIZE; x++) {
-            int idx = y * BOARD_SIZE + x;
+    for (int y = 0; y < env->height; y++) {
+        for (int x = 0; x < env->width; x++) {
+            int idx = y * env->width + x;
             if (env->board_owner[idx] != 1) continue;
             
             // Calculate distance to unconnected crystals
@@ -494,51 +501,62 @@ static float get_min_distance_to_crystals(Crystalboard* env) {
     return min_dist;
 }
 
-static int decode_action(int action, int* card_idx, int* x, int* y, int* rotation) {
-    // action = card_idx * 400 + x * 40 + y * 4 + rotation
-    if (action < 0 || action >= NUM_ACTIONS) {
+static int decode_action(Crystalboard* env, int action, int* card_idx, int* x, int* y, int* rotation) {
+    // action definition depends on width/height
+    // We'll flatten strictly:
+    // action = card_idx * (W*H*4) + (y * W + x) * 4 + rotation (Standard PufferLib spatial style usually y*W+x)
+    
+    int num_pos_rot = env->width * env->height * 4;
+    int total_actions = TOTAL_MARKET_SLOTS * num_pos_rot;
+    
+    if (action < 0 || action >= total_actions) {
         return 0;
     }
     
     *rotation = action % 4;
     int rem = action / 4;
-    *y = rem % 10;
-    rem = rem / 10;
-    *x = rem % 10;
-    *card_idx = rem / 10;
+    
+    int pos_idx = rem % (env->width * env->height);
+    *x = pos_idx % env->width;
+    *y = pos_idx / env->width;
+    
+    *card_idx = rem / (env->width * env->height);
     
     return 1;
 }
 
-// Observation format:
-// - Board state: 100 values (one-hot would be too large, use integers)
-// - Market: 7 * 30 = 210 values (shape as 5x5 + metadata)
-// - Crystal info: 3 * 4 = 12 values (x, y, connected, amount)
-// Total: ~322 floats
+// Helper to encode action (mostly for interactive play)
+static int encode_action(Crystalboard* env, int card_idx, int x, int y, int rotation) {
+    int pos_idx = y * env->width + x;
+    return card_idx * (env->width * env->height * 4) + pos_idx * 4 + rotation;
+}
 
-#define OBS_BOARD_SIZE 100
+
 #define OBS_MARKET_SIZE 210  // 7 cards * 30 features each
 #define OBS_CRYSTAL_SIZE 12
-#define OBS_REAL_SIZE (OBS_BOARD_SIZE + OBS_MARKET_SIZE + OBS_CRYSTAL_SIZE)
-#define OBS_TOTAL_SIZE (OBS_REAL_SIZE + NUM_ACTIONS)
+// OBS_BOARD_SIZE is dynamic: env->board_tiles
+
+// Total Obs Size matches what python expects?
+// Binding/Python side handles the buffer size allocation.
+// We just write to current `env->observations`.
+// OBS_REAL_SIZE = board_tiles + 210 + 12
+// OBS_TOTAL_SIZE = OBS_REAL_SIZE + NUM_ACTIONS (for action mask)
 
 static void fill_observation(Crystalboard* env) {
     int idx = 0;
     
-    // Board observation: encode structure type (0-4) as float
-    for (int i = 0; i < BOARD_TILES; i++) {
-        // Encode: empty=0, street=1, extraction=2, base=3, crystal=4
+    // Board observation
+    for (int i = 0; i < env->board_tiles; i++) {
         float val = 0.0f;
         if (env->board_feature[i] == TILE_CRYSTAL_NODE) {
             val = 4.0f;
         } else if (env->board_structure[i] != TILE_EMPTY) {
             val = (float)env->board_structure[i];
         }
-        // Also encode ownership
         if (env->board_owner[i] == 1) {
-            val += 10.0f;  // Add 10 if player owns
+            val += 10.0f;
         }
-        env->observations[idx++] = val / 14.0f;  // Normalize to 0-1
+        env->observations[idx++] = val / 14.0f;
     }
     
     // Market cards
@@ -547,16 +565,10 @@ static void fill_observation(Crystalboard* env) {
             ? &env->building_market[c] 
             : &env->street_market[c - NUM_BUILDING_SLOTS];
         
-        // Is building
         env->observations[idx++] = card->is_building ? 1.0f : 0.0f;
-        
-        // Points (normalized)
         env->observations[idx++] = card->static_points / 5.0f;
-        
-        // Num cells
         env->observations[idx++] = card->shape.num_cells / 5.0f;
         
-        // Shape as 5x5 grid (25 values)
         float shape_grid[25] = {0};
         for (int i = 0; i < card->shape.num_cells; i++) {
             int sx = card->shape.cells[i][0];
@@ -568,24 +580,22 @@ static void fill_observation(Crystalboard* env) {
         for (int i = 0; i < 25; i++) {
             env->observations[idx++] = shape_grid[i];
         }
-        
-        // Padding to 30 features per card
         env->observations[idx++] = 0.0f;
         env->observations[idx++] = 0.0f;
     }
     
     // Crystal info
     for (int i = 0; i < NUM_CRYSTALS; i++) {
-        env->observations[idx++] = env->crystals[i].x / (float)(BOARD_SIZE - 1);
-        env->observations[idx++] = env->crystals[i].y / (float)(BOARD_SIZE - 1);
+        env->observations[idx++] = env->crystals[i].x / (float)(env->width - 1);
+        env->observations[idx++] = env->crystals[i].y / (float)(env->height - 1);
         env->observations[idx++] = env->crystals[i].connected ? 1.0f : 0.0f;
         env->observations[idx++] = env->crystals[i].amount / 10.0f;
     }
 
-    // Action mask: 2800 values (1.0 for valid, 0.0 for invalid)
-    // action = card_idx * 400 + x * 40 + y * 4 + rotation
+    // Action mask
+    // Values start at idx
+    // Total actions = 7 * W * H * 4
     
-    // Pre-calculate rotated shapes for all 7 cards in the market
     int rotated_shapes[TOTAL_MARKET_SLOTS][4][MAX_SHAPE_SIZE][2];
     int num_cells[TOTAL_MARKET_SLOTS];
 
@@ -606,19 +616,25 @@ static void fill_observation(Crystalboard* env) {
         }
     }
 
-    // Explicitly zero the mask area first
-    for (int i = 0; i < NUM_ACTIONS; i++) {
-        env->observations[OBS_REAL_SIZE + i] = 0.0f;
+    int num_actions = TOTAL_MARKET_SLOTS * env->width * env->height * 4;
+    // We must assume the observations buffer is large enough!
+    // env->observations allocated size should ideally be passed or known.
+    // For now we trust Python side calculated it correctly.
+    
+    for (int i = 0; i < num_actions; i++) {
+        env->observations[idx + i] = 0.0f;
     }
 
+    // This loop is expensive for large grids (30x30x7x4 = ~25k iterations)
     for (int card_idx = 0; card_idx < TOTAL_MARKET_SLOTS; card_idx++) {
-        for (int x = 0; x < BOARD_SIZE; x++) {
-            for (int y = 0; y < BOARD_SIZE; y++) {
+        for (int x = 0; x < env->width; x++) {
+            for (int y = 0; y < env->height; y++) {
                 for (int r = 0; r < 4; r++) {
                     if (can_place_tile(env, x, y, rotated_shapes[card_idx][r], num_cells[card_idx]) &&
                         is_connected_to_network(env, x, y, rotated_shapes[card_idx][r], num_cells[card_idx])) {
-                        int action_idx = card_idx * 400 + x * 40 + y * 4 + r;
-                        env->observations[OBS_REAL_SIZE + action_idx] = 1.0f;
+                        
+                        int action_idx = encode_action(env, card_idx, x, y, r);
+                        env->observations[idx + action_idx] = 1.0f;
                     }
                 }
             }
@@ -636,17 +652,39 @@ void add_log(Crystalboard* env) {
     env->log.n++;
 }
 
+// Rendering with Raylib (Dynamic)
+static const Color PUFF_BACKGROUND = {6, 24, 24, 255};
+static const Color PUFF_CYAN = {0, 187, 187, 255};
+static const Color PUFF_RED = {187, 0, 0, 255};
+static const Color PUFF_WHITE = {241, 241, 241, 255};
+static const Color PUFF_YELLOW = {255, 255, 0, 255};
+static const Color PUFF_GREEN = {0, 187, 0, 255};
+static const Color PUFF_PURPLE = {187, 0, 187, 255};
+static const Color PUFF_DARK_CYAN = {0, 100, 100, 255};
+static const Color PUFF_GRID = {20, 60, 60, 255};
+static const Color PUFF_GRAY = {130, 130, 130, 255};
+
+// Forward declaration of internal drawing to keep it separable if needed
+void c_draw_internal(Crystalboard* env);
+
 void c_reset(Crystalboard* env) {
+    // Check if board memory is allocated
+    if (!env->board_owner || !env->board_structure || !env->board_feature) {
+        // If not allocated (e.g. standalone mode might fail here if not careful), return or error.
+        // Standalone must allocate before calling c_reset.
+        return;
+    }
+    
     // Clear board
-    memset(env->board_owner, 0, BOARD_TILES);
-    memset(env->board_structure, TILE_EMPTY, BOARD_TILES);
-    memset(env->board_feature, TILE_EMPTY, BOARD_TILES);
+    memset(env->board_owner, 0, env->board_tiles);
+    memset(env->board_structure, TILE_EMPTY, env->board_tiles);
+    memset(env->board_feature, TILE_EMPTY, env->board_tiles);
     env->last_total_distance = 0;
     
-    // Increment reset counter and update RNG state for variety
+    // Increment reset counter
     env->reset_count++;
     env->rng_state = env->seed + env->reset_count * 1000003;
-    if (env->rng_state == 0) env->rng_state = 1;  // xorshift needs non-zero
+    if (env->rng_state == 0) env->rng_state = 1;
     
     // Reset stats
     env->tick = 0;
@@ -663,211 +701,32 @@ void c_reset(Crystalboard* env) {
     fill_observation(env);
 }
 
-void c_step(Crystalboard* env) {
-    env->tick++;
-    
-    int action = env->actions[0];
-    env->terminals[0] = 0;
-    env->rewards[0] = REWARD_STEP_PENALTY;
-    
-    // Decode action
-    int card_idx, x, y, rotation;
-    if (!decode_action(action, &card_idx, &x, &y, &rotation)) {
-        // Invalid action - terminate episode immediately
-        env->rewards[0] = REWARD_INVALID_MOVE;
-        env->invalid_placements++;
-        env->terminals[0] = 1;
-        env->log.episode_return += env->rewards[0];
-        add_log(env);
-        if (env->render_mode) {
-            c_render(env);
-            WaitTime(4.0f);
-        }
-        c_reset(env);
-        return;
-    }
-    
-    // Get card from market
-    Card* card = NULL;
-    int is_building = (card_idx < NUM_BUILDING_SLOTS);
-    
-    if (is_building) {
-        card = &env->building_market[card_idx];
-    } else {
-        int street_idx = card_idx - NUM_BUILDING_SLOTS;
-        if (street_idx < NUM_STREET_SLOTS) {
-            card = &env->street_market[street_idx];
-        }
-    }
-    
-    if (card == NULL) {
-        // Invalid card - terminate episode immediately
-        env->rewards[0] = REWARD_INVALID_MOVE;
-        env->invalid_placements++;
-        env->terminals[0] = 1;
-        env->log.episode_return += env->rewards[0];
-        add_log(env);
-        if (env->render_mode) {
-            c_render(env);
-            WaitTime(4.0f);
-        }
-        c_reset(env);
-        return;
-    }
-    
-    // Get distance before placement
-    float prev_dist = get_min_distance_to_crystals(env);
-    int prev_connected = count_connected_crystals(env);
-    
-    // Get rotated shape
-    int rotated_shape[MAX_SHAPE_SIZE][2];
-    int raw_shape[MAX_SHAPE_SIZE][2];
-    for (int i = 0; i < card->shape.num_cells; i++) {
-        raw_shape[i][0] = card->shape.cells[i][0];
-        raw_shape[i][1] = card->shape.cells[i][1];
-    }
-    rotate_shape(raw_shape, card->shape.num_cells, rotation, rotated_shape);
-    
-    // Check if placement is valid (no overlap, in bounds)
-    if (!can_place_tile(env, x, y, rotated_shape, card->shape.num_cells)) {
-        // Invalid placement - terminate episode immediately
-        env->rewards[0] = REWARD_INVALID_MOVE;
-        env->invalid_placements++;
-        env->terminals[0] = 1;
-        env->log.episode_return += env->rewards[0];
-        add_log(env);
-        if (env->render_mode) {
-            c_render(env);
-            WaitTime(4.0f);
-        }
-        c_reset(env);
-        return;
-    }
-    
-    // Check if connected to network
-    if (!is_connected_to_network(env, x, y, rotated_shape, card->shape.num_cells)) {
-        // Not connected to network - terminate episode immediately
-        env->rewards[0] = REWARD_INVALID_MOVE;
-        env->invalid_placements++;
-        env->terminals[0] = 1;
-        env->log.episode_return += env->rewards[0];
-        add_log(env);
-        if (env->render_mode) {
-            c_render(env);
-            WaitTime(4.0f);
-        }
-        c_reset(env);
-        return;
-    }
-    
-    // Place the tile
-    int tile_type = is_building ? TILE_EXTRACTION_BUILDING : TILE_STREET;
-    place_tile(env, x, y, rotated_shape, card->shape.num_cells, tile_type);
+// ... (previous code)
 
-    // Replace the used card with a new random one from the deck
-    replace_used_card(env, card_idx);
-
-    env->valid_placements++;
-    env->rewards[0] += REWARD_VALID_PLACEMENT;
+void c_render(Crystalboard* env) {
+    int max_dim = (env->width > env->height) ? env->width : env->height;
+    int cell_size = 800 / max_dim; // Reduced from 1000 to 800 for smaller screens
+    if (cell_size > 48) cell_size = 48; // Cap size
+    if (cell_size < 8) cell_size = 8; // Min size
     
-    // 1. Calculate Sum of Manhattan Distances to all unconnected crystals
-    float current_total_dist = 0;
-    int active_crystals = 0;
-    for (int i = 0; i < NUM_CRYSTALS; i++) {
-        if (!env->crystals[i].connected) {
-            // Find the closest player tile to THIS specific crystal
-            float min_dist_to_this_crystal = 20.0f; // Max board distance
-            for (int idx = 0; idx < BOARD_TILES; idx++) {
-                if (env->board_owner[idx] == 1) {
-                    int px = idx % BOARD_SIZE;
-                    int py = idx / BOARD_SIZE;
-                    int d = abs(px - env->crystals[i].x) + abs(py - env->crystals[i].y);
-                    if (d < min_dist_to_this_crystal) min_dist_to_this_crystal = (float)d;
-                }
-            }
-            current_total_dist += min_dist_to_this_crystal;
-            active_crystals++;
-        }
+    int market_width = 200;
+    int win_w = env->width * cell_size + market_width;
+    int win_h = env->height * cell_size + 80;
+
+    if (!IsWindowReady()) {
+        InitWindow(win_w, win_h, "Crystalboard - PufferLib Ocean");
+        SetTargetFPS(60);
+    }
+    
+    if (IsKeyDown(KEY_ESCAPE)) {
+        // Just return, let caller handle exit
     }
 
-    // 2. Reward for reducing the total distance gap
-    // If prev_total_dist was 15 and current is 14, reward the difference
-    if (active_crystals > 0) {
-        float distance_improvement = env->last_total_distance - current_total_dist;
-        if (distance_improvement > 0) {
-            env->rewards[0] += (distance_improvement * REWARD_DISTANCE_SCALE);
-        }
-    }
-    env->last_total_distance = current_total_dist;
-    
-    // Connection reward
-    int curr_connected = count_connected_crystals(env);
-    env->crystals_connected = curr_connected;
-    
-    if (curr_connected > prev_connected) {
-        env->rewards[0] += REWARD_CONNECTION;
-    }
-    
-    // Win condition: 2+ crystals connected
-    if (curr_connected >= 3) {
-        env->rewards[0] += REWARD_WIN_BONUS;
-        env->terminals[0] = 1;
-        env->log.episode_return += env->rewards[0];
-        add_log(env);
-        if (env->render_mode) {
-            c_render(env);
-            WaitTime(4.0f);
-        }
-        c_reset(env);
-        return;
-    }
-    
-    // Truncation
-    if (env->tick >= env->max_steps) {
-        env->terminals[0] = 1;
-        env->log.episode_return += env->rewards[0];
-        add_log(env);
-        if (env->render_mode) {
-            c_render(env);
-            WaitTime(4.0f);
-        }
-        c_reset(env);
-        return;
-    }
-    
-    env->log.episode_return += env->rewards[0];
-    fill_observation(env);
+    BeginDrawing();
+    ClearBackground(PUFF_BACKGROUND);
+    c_draw_internal(env);
+    EndDrawing();
 }
-
-// ============================================================================
-// Helper: Encode action from (card_idx, x, y, rotation)
-// ============================================================================
-
-static int encode_action(int card_idx, int x, int y, int rotation) {
-    // action = card_idx * 400 + x * 40 + y * 4 + rotation
-    return card_idx * 400 + x * 40 + y * 4 + rotation;
-}
-
-// ============================================================================
-// Rendering with Raylib
-// ============================================================================
-
-// Colors (PufferLib style)
-static const Color PUFF_BACKGROUND = {6, 24, 24, 255};
-static const Color PUFF_CYAN = {0, 187, 187, 255};
-static const Color PUFF_RED = {187, 0, 0, 255};
-static const Color PUFF_WHITE = {241, 241, 241, 255};
-static const Color PUFF_YELLOW = {255, 255, 0, 255};
-static const Color PUFF_GREEN = {0, 187, 0, 255};
-static const Color PUFF_PURPLE = {187, 0, 187, 255};
-static const Color PUFF_DARK_CYAN = {0, 100, 100, 255};
-static const Color PUFF_GRID = {20, 60, 60, 255};
-
-#define CELL_SIZE 48
-#define MARKET_WIDTH 200
-#define INFO_HEIGHT 80
-#define WINDOW_WIDTH (BOARD_SIZE * CELL_SIZE + MARKET_WIDTH)
-#define WINDOW_HEIGHT (BOARD_SIZE * CELL_SIZE + INFO_HEIGHT)
 
 static void draw_shape_preview(int x, int y, Card* card, int rotation, Color color, int cell_size) {
     int rotated_shape[MAX_SHAPE_SIZE][2];
@@ -886,24 +745,28 @@ static void draw_shape_preview(int x, int y, Card* card, int rotation, Color col
 }
 
 void c_draw_internal(Crystalboard* env) {
+    int max_dim = (env->width > env->height) ? env->width : env->height;
+    int cell_size = 800 / max_dim; // Same scaling as render
+    if (cell_size > 48) cell_size = 48;
+    if (cell_size < 8) cell_size = 8;
+    
     // Draw grid
-    for (int i = 0; i <= BOARD_SIZE; i++) {
-        // Vertical lines
-        DrawLine(i * CELL_SIZE, 0, i * CELL_SIZE, BOARD_SIZE * CELL_SIZE, PUFF_GRID);
-        // Horizontal lines
-        DrawLine(0, i * CELL_SIZE, BOARD_SIZE * CELL_SIZE, i * CELL_SIZE, PUFF_GRID);
+    for (int i = 0; i <= env->width; i++) {
+        DrawLine(i * cell_size, 0, i * cell_size, env->height * cell_size, PUFF_GRID);
+    }
+    for (int i = 0; i <= env->height; i++) {
+        DrawLine(0, i * cell_size, env->width * cell_size, i * cell_size, PUFF_GRID);
     }
     
     // Draw board cells
-    for (int y = 0; y < BOARD_SIZE; y++) {
-        for (int x = 0; x < BOARD_SIZE; x++) {
-            int idx = y * BOARD_SIZE + x;
-            int px = x * CELL_SIZE;
-            int py = y * CELL_SIZE;
+    for (int y = 0; y < env->height; y++) {
+        for (int x = 0; x < env->width; x++) {
+            int idx = y * env->width + x;
+            int px = x * cell_size;
+            int py = y * cell_size;
             
             // Draw features first (crystal nodes)
             if (env->board_feature[idx] == TILE_CRYSTAL_NODE) {
-                // Check if connected
                 int connected = 0;
                 for (int i = 0; i < NUM_CRYSTALS; i++) {
                     if (env->crystals[i].x == x && env->crystals[i].y == y) {
@@ -912,125 +775,224 @@ void c_draw_internal(Crystalboard* env) {
                     }
                 }
                 Color c = connected ? PUFF_GREEN : PUFF_YELLOW;
-                DrawCircle(px + CELL_SIZE/2, py + CELL_SIZE/2, CELL_SIZE/3, c);
-                DrawText("C", px + CELL_SIZE/2 - 5, py + CELL_SIZE/2 - 8, 16, PUFF_BACKGROUND);
+                DrawCircle(px + cell_size/2, py + cell_size/2, cell_size/3, c);
+                if (cell_size >= 20) DrawText("C", px + cell_size/2 - 5, py + cell_size/2 - 8, cell_size/3, PUFF_BACKGROUND);
             }
             
             // Draw structures
             if (env->board_structure[idx] != TILE_EMPTY) {
                 Color c;
-                const char* label = "";
-                
                 switch (env->board_structure[idx]) {
-                    case TILE_STREET:
-                        c = PUFF_CYAN;
-                        label = "-";
-                        break;
-                    case TILE_EXTRACTION_BUILDING:
-                        c = PUFF_PURPLE;
-                        label = "E";
-                        break;
-                    case TILE_START_BASE:
-                        c = PUFF_DARK_CYAN;
-                        label = "B";
-                        break;
-                    default:
-                        c = PUFF_WHITE;
-                        label = "?";
+                    case TILE_STREET: c = PUFF_CYAN; break;
+                    case TILE_EXTRACTION_BUILDING: c = PUFF_PURPLE; break;
+                    case TILE_START_BASE: c = PUFF_DARK_CYAN; break;
+                    default: c = PUFF_WHITE;
                 }
-                
-                DrawRectangle(px + 2, py + 2, CELL_SIZE - 4, CELL_SIZE - 4, c);
-                DrawText(label, px + CELL_SIZE/2 - 4, py + CELL_SIZE/2 - 8, 16, PUFF_BACKGROUND);
+                DrawRectangle(px + 1, py + 1, cell_size - 2, cell_size - 2, c);
             }
         }
     }
     
-    // Draw coordinate labels
-    for (int i = 0; i < BOARD_SIZE; i++) {
-        char buf[4];
-        snprintf(buf, sizeof(buf), "%d", i);
-        // X axis at bottom
-        DrawText(buf, i * CELL_SIZE + CELL_SIZE/2 - 4, BOARD_SIZE * CELL_SIZE + 2, 12, PUFF_WHITE);
-    }
-    
-    // Draw market panel (right side)
-    int market_x = BOARD_SIZE * CELL_SIZE + 10;
+    // Draw market panel
+    int market_x = env->width * cell_size + 10;
     int market_y = 10;
-    
     DrawText("MARKET", market_x, market_y, 20, PUFF_WHITE);
     market_y += 30;
     
-    // Buildings (0-3)
-    DrawText("Buildings:", market_x, market_y, 14, PUFF_CYAN);
-    market_y += 18;
-    
+// ... (previous code)
+
+    // Buildings
     for (int i = 0; i < NUM_BUILDING_SLOTS; i++) {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "[%d]", i);
-        DrawText(buf, market_x, market_y, 12, PUFF_WHITE);
-        
-        // Draw shape preview
-        draw_shape_preview(market_x + 30, market_y - 5, &env->building_market[i], 0, PUFF_PURPLE, 12);
+        char num[4];
+        snprintf(num, sizeof(num), "%d", i);
+        DrawText(num, market_x, market_y + 10, 20, PUFF_WHITE);
+        draw_shape_preview(market_x + 30, market_y, &env->building_market[i], 0, PUFF_PURPLE, 12);
         market_y += 50;
     }
     
-    // Streets (4-6)
-    DrawText("Streets:", market_x, market_y, 14, PUFF_CYAN);
-    market_y += 18;
-    
+    market_y += 10;
+    // Streets
     for (int i = 0; i < NUM_STREET_SLOTS; i++) {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "[%d]", i + NUM_BUILDING_SLOTS);
-        DrawText(buf, market_x, market_y, 12, PUFF_WHITE);
-        
-        // Draw shape preview
-        draw_shape_preview(market_x + 30, market_y - 5, &env->street_market[i], 0, PUFF_CYAN, 12);
+        char num[4];
+        snprintf(num, sizeof(num), "%d", i + NUM_BUILDING_SLOTS);
+        DrawText(num, market_x, market_y + 10, 20, PUFF_WHITE);
+        draw_shape_preview(market_x + 30, market_y, &env->street_market[i], 0, PUFF_CYAN, 12);
         market_y += 50;
     }
     
-    // Draw info panel (bottom)
-    int info_y = BOARD_SIZE * CELL_SIZE + 20;
+    // -- RESTORED TEXT --
+    int text_y = env->height * cell_size + 10;
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "Steps: %d/%d  |  Crystals: %d/3  |  Return: %.1f", 
+             env->tick, env->max_steps, env->crystals_connected, env->log.episode_return);
+    DrawText(buffer, 10, text_y, 20, PUFF_WHITE);
     
-    char info[128];
-    snprintf(info, sizeof(info), "Step: %d  Connected: %d/3  Reward: %.2f", 
-             env->tick, env->crystals_connected, env->rewards ? env->rewards[0] : 0.0f);
-    DrawText(info, 10, info_y, 16, PUFF_WHITE);
-    
-    // Controls help
-    DrawText("Enter: card x y rot (e.g. '4 3 3 0')", 10, info_y + 20, 12, PUFF_CYAN);
-    DrawText("ESC: quit | R: reset", 10, info_y + 35, 12, PUFF_CYAN);
-    
-    // Draw last action
-    int action = env->actions[0];
-    int rot = action % 4;
-    int rem = action / 4;
-    int y_coord = rem % 10;
-    rem = rem / 10;
-    int x_coord = rem % 10;
-    int card_idx = rem / 10;
-    
-    char action_buf[64];
-    snprintf(action_buf, sizeof(action_buf), "Action: Card %d at (%d, %d) Rot %d", card_idx, x_coord, y_coord, rot);
-    DrawText(action_buf, 10, info_y + 55, 16, PUFF_YELLOW);
+    DrawText("Controls: 0-6 Select Card | WASD Move | Q/E Rotate | Space Place | R Reset", 10, text_y + 25, 10, PUFF_GRAY);
 }
 
-void c_render(Crystalboard* env) {
-    if (!IsWindowReady()) {
-        InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Crystalboard - PufferLib Ocean");
-        SetTargetFPS(60);
+void c_step(Crystalboard* env) {
+    env->tick++;
+    
+    int action = env->actions[0];
+    env->terminals[0] = 0;
+    env->rewards[0] = REWARD_STEP_PENALTY;
+    
+    int card_idx, x, y, rotation;
+    if (!decode_action(env, action, &card_idx, &x, &y, &rotation)) {
+        env->rewards[0] = REWARD_INVALID_MOVE;
+        env->invalid_placements++;
+        env->terminals[0] = 1;
+        env->log.episode_return += env->rewards[0];
+        add_log(env);
+        if (env->render_mode) {
+            c_render(env);
+            WaitTime(4.0f);
+        }
+        c_reset(env);
+        return;
     }
     
-    if (IsKeyDown(KEY_ESCAPE)) {
-        exit(0);
+    Card* card = NULL;
+    int is_building = (card_idx < NUM_BUILDING_SLOTS);
+    
+    if (is_building) {
+        card = &env->building_market[card_idx];
+    } else {
+        int street_idx = card_idx - NUM_BUILDING_SLOTS;
+        if (street_idx < NUM_STREET_SLOTS) {
+            card = &env->street_market[street_idx];
+        }
+    }
+    
+    if (card == NULL) {
+        env->rewards[0] = REWARD_INVALID_MOVE;
+        env->invalid_placements++;
+        env->terminals[0] = 1;
+        env->log.episode_return += env->rewards[0];
+        add_log(env);
+        if (env->render_mode) {
+            c_render(env);
+            WaitTime(4.0f);
+        }
+        c_reset(env);
+        return;
+    }
+    
+    // Get distance before placement
+    float prev_dist = get_min_distance_to_crystals(env);
+    int prev_connected = count_connected_crystals(env);
+    
+    int rotated_shape[MAX_SHAPE_SIZE][2];
+    int raw_shape[MAX_SHAPE_SIZE][2];
+    for (int i = 0; i < card->shape.num_cells; i++) {
+        raw_shape[i][0] = card->shape.cells[i][0];
+        raw_shape[i][1] = card->shape.cells[i][1];
+    }
+    rotate_shape(raw_shape, card->shape.num_cells, rotation, rotated_shape);
+    
+    if (!can_place_tile(env, x, y, rotated_shape, card->shape.num_cells)) {
+        env->rewards[0] = REWARD_INVALID_MOVE;
+        env->invalid_placements++;
+        env->terminals[0] = 1;
+        env->log.episode_return += env->rewards[0];
+        add_log(env);
+        if (env->render_mode) {
+             c_render(env);
+             WaitTime(4.0f);
+        }
+        c_reset(env);
+        return;
+    }
+    
+    if (!is_connected_to_network(env, x, y, rotated_shape, card->shape.num_cells)) {
+        env->rewards[0] = REWARD_INVALID_MOVE;
+        env->invalid_placements++;
+        env->terminals[0] = 1;
+        env->log.episode_return += env->rewards[0];
+        add_log(env);
+        if (env->render_mode) {
+             c_render(env);
+             WaitTime(4.0f);
+        }
+        c_reset(env);
+        return;
+    }
+    
+    int tile_type = is_building ? TILE_EXTRACTION_BUILDING : TILE_STREET;
+    place_tile(env, x, y, rotated_shape, card->shape.num_cells, tile_type);
+
+    replace_used_card(env, card_idx);
+
+    env->valid_placements++;
+    env->rewards[0] += REWARD_VALID_PLACEMENT;
+    
+    float current_total_dist = 0;
+    int active_crystals = 0;
+    for (int i = 0; i < NUM_CRYSTALS; i++) {
+        if (!env->crystals[i].connected) {
+            float min_dist_to_this_crystal = (float)(env->width + env->height);
+            for (int idx = 0; idx < env->board_tiles; idx++) {
+                if (env->board_owner[idx] == 1) {
+                    int px = idx % env->width;
+                    int py = idx / env->width;
+                    int d = abs(px - env->crystals[i].x) + abs(py - env->crystals[i].y);
+                    if (d < min_dist_to_this_crystal) min_dist_to_this_crystal = (float)d;
+                }
+            }
+            current_total_dist += min_dist_to_this_crystal;
+            active_crystals++;
+        }
     }
 
-    BeginDrawing();
-    ClearBackground(PUFF_BACKGROUND);
-    c_draw_internal(env);
-    EndDrawing();
+    if (active_crystals > 0) {
+        float distance_improvement = env->last_total_distance - current_total_dist;
+        if (distance_improvement > 0) {
+            env->rewards[0] += (distance_improvement * REWARD_DISTANCE_SCALE);
+        }
+    }
+    env->last_total_distance = current_total_dist;
+    
+    int curr_connected = count_connected_crystals(env);
+    env->crystals_connected = curr_connected;
+    
+    if (curr_connected > prev_connected) {
+        env->rewards[0] += REWARD_CONNECTION;
+    }
+    
+    if (curr_connected >= 3) {
+        env->rewards[0] += REWARD_WIN_BONUS;
+        env->terminals[0] = 1;
+        env->log.episode_return += env->rewards[0];
+        add_log(env);
+        if (env->render_mode) {
+            c_render(env);
+            WaitTime(4.0f);
+        }
+        c_reset(env);
+        return;
+    }
+    
+    if (env->tick >= env->max_steps) {
+        env->terminals[0] = 1;
+        env->log.episode_return += env->rewards[0];
+        add_log(env);
+        if (env->render_mode) {
+             c_render(env);
+             WaitTime(4.0f);
+        }
+        c_reset(env);
+        return;
+    }
+    
+    env->log.episode_return += env->rewards[0];
+    fill_observation(env);
 }
 
 void c_close(Crystalboard* env) {
+    if (env->board_owner) free(env->board_owner);
+    if (env->board_structure) free(env->board_structure);
+    if (env->board_feature) free(env->board_feature);
+    
     if (IsWindowReady()) {
         CloseWindow();
     }
@@ -1042,23 +1004,22 @@ void c_close(Crystalboard* env) {
 
 static void print_board(Crystalboard* env) {
     printf("\n   ");
-    for (int x = 0; x < BOARD_SIZE; x++) {
-        printf(" %d", x);
+    for (int x = 0; x < env->width; x++) {
+        printf(" %d", x % 10);
     }
     printf("\n   ");
-    for (int x = 0; x < BOARD_SIZE; x++) {
+    for (int x = 0; x < env->width; x++) {
         printf("--");
     }
     printf("\n");
     
-    for (int y = 0; y < BOARD_SIZE; y++) {
+    for (int y = 0; y < env->height; y++) {
         printf("%2d|", y);
-        for (int x = 0; x < BOARD_SIZE; x++) {
-            int idx = y * BOARD_SIZE + x;
+        for (int x = 0; x < env->width; x++) {
+            int idx = y * env->width + x;
             char c = '.';
             
             if (env->board_feature[idx] == TILE_CRYSTAL_NODE) {
-                // Check if connected
                 int connected = 0;
                 for (int i = 0; i < NUM_CRYSTALS; i++) {
                     if (env->crystals[i].x == x && env->crystals[i].y == y) {

@@ -36,6 +36,29 @@ static int my_init(Env* env, PyObject* args, PyObject* kwargs) {
         env->render_mode = 0;
     }
 
+    // Get board_size from kwargs (default 10)
+    PyObject* board_size_obj = PyDict_GetItemString(kwargs, "board_size");
+    int board_size = 10;
+    if (board_size_obj != NULL && PyLong_Check(board_size_obj)) {
+        board_size = (int)PyLong_AsLong(board_size_obj);
+    }
+    
+    env->width = board_size;
+    env->height = board_size;
+    env->board_tiles = env->width * env->height;
+    
+    // Allocate dynamic arrays
+    env->board_owner = (unsigned char*)calloc(env->board_tiles, sizeof(unsigned char));
+    env->board_structure = (unsigned char*)calloc(env->board_tiles, sizeof(unsigned char));
+    env->board_feature = (unsigned char*)calloc(env->board_tiles, sizeof(unsigned char));
+    
+    if (!env->board_owner || !env->board_structure || !env->board_feature) {
+        // Handle allocation failure?
+        // In C extension, maybe set Python error?
+        // For now just return non-zero?
+        return -1;
+    }
+
     return 0;
 }
 

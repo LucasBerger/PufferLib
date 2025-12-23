@@ -1210,32 +1210,35 @@ class CrystalboardHybridPolicy(nn.Module):
         num_heads=4,
         num_layers=2, # Reduced layers as CNN does heavy lifting
         hidden_size=256,
+        board_size=10,
         **kwargs
     ):
         super().__init__()
-        self.board_size = 100
+        self.board_size = board_size
+        self.num_grid_tiles = board_size * board_size
         self.market_size = 210
         self.crystal_size = 12
+        self.obs_real_size = self.num_grid_tiles + self.market_size + self.crystal_size
         
         # --- 1. Board Encoder (Spatial) ---
         # We unpack the single float back into discrete categories
         self.type_embed = nn.Embedding(5, 32) # Empty, Street, Extraction, Base, Crystal
         self.owner_embed = nn.Embedding(2, 16) # Neutral, Player
         
-        # CNN to process the 10x10 board naturally
+        # CNN to process the board naturally
         self.board_cnn = nn.Sequential(
             nn.Conv2d(32+16, 64, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Conv2d(64, embed_dim, kernel_size=3, padding=1),
             nn.ReLU()
-            # Output: [B, embed_dim, 10, 10] -> which we treat as 100 tokens of size embed_dim
+            # Output: [B, embed_dim, W, H]
         )
 
         # --- 2. Market Encoder (Spatial) ---
         self.market_encoder = SpatialCardEncoder(embed_dim)
         
         # --- 3. Transformer Backbone ---
-        # We fuse Board (100 tokens) + Market (7 tokens)
+        # We fuse Board (W*H tokens) + Market (7 tokens)
         encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads, batch_first=True)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
@@ -1249,17 +1252,19 @@ class CrystalboardHybridPolicy(nn.Module):
         action_mask = None
         if isinstance(observations, tuple):
              observations, action_mask = observations
-        elif observations.shape[-1] > 322:
-             action_mask = observations[:, 322:]
-             observations = observations[:, :322]
+        elif observations.shape[-1] > self.obs_real_size:
+             action_mask = observations[:, self.obs_real_size:]
+             observations = observations[:, :self.obs_real_size]
         
         # --- Preprocessing ---
         device = observations.device
         B = observations.shape[0]
         
         # Split Obs
-        board_obs = observations[:, :100]
-        market_obs = observations[:, 100:310].reshape(B, 7, 30)
+        board_obs = observations[:, :self.num_grid_tiles]
+        market_start = self.num_grid_tiles
+        market_end = market_start + self.market_size
+        market_obs = observations[:, market_start:market_end].reshape(B, 7, 30)
         
         # --- 1. Process Board (Reverse Engineering C-Code) ---
         # Reversing: val = obs * 14.0
@@ -1271,19 +1276,19 @@ class CrystalboardHybridPolicy(nn.Module):
         tile_type = raw_board % 10
         
         # Embed and shape to (B, C, H, W)
-        emb_type = self.type_embed(tile_type).transpose(1, 2).view(B, 32, 10, 10)
-        emb_owner = self.owner_embed(ownership).transpose(1, 2).view(B, 16, 10, 10)
+        emb_type = self.type_embed(tile_type).transpose(1, 2).view(B, 32, self.board_size, self.board_size)
+        emb_owner = self.owner_embed(ownership).transpose(1, 2).view(B, 16, self.board_size, self.board_size)
         cnn_in = torch.cat([emb_type, emb_owner], dim=1)
         
         # CNN Pass
-        board_features = self.board_cnn(cnn_in) # (B, 128, 10, 10)
-        board_tokens = board_features.flatten(2).transpose(1, 2) # (B, 100, 128)
+        board_features = self.board_cnn(cnn_in) # (B, embed_dim, W, H)
+        board_tokens = board_features.flatten(2).transpose(1, 2) # (B, W*H, embed_dim)
         
         # --- 2. Process Market ---
-        market_tokens = self.market_encoder(market_obs) # (B, 7, 128)
+        market_tokens = self.market_encoder(market_obs) # (B, 7, embed_dim)
         
         # --- 3. Fusion (Transformer) ---
-        # Concatenate: [Board Tokens (100) | Market Tokens (7)]
+        # Concatenate: [Board Tokens (W*H) | Market Tokens (7)]
         all_tokens = torch.cat([board_tokens, market_tokens], dim=1)
         
         # Self-Attention
@@ -1308,3 +1313,7 @@ class CrystalboardHybridPolicy(nn.Module):
 
     def forward_eval(self, observations, state=None):
         return self.forward(observations, state)
+
+class Crystalboard30x30(CrystalboardHybridPolicy):
+    def __init__(self, env, **kwargs):
+        super().__init__(env, board_size=30, **kwargs)

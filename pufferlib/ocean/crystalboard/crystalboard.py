@@ -14,16 +14,9 @@ import pufferlib
 from pufferlib.ocean.crystalboard import binding
 
 
-# Observation dimensions (must match crystalboard.h)
-BOARD_SIZE = 10
-BOARD_TILES = BOARD_SIZE * BOARD_SIZE
-OBS_BOARD_SIZE = 100
-OBS_MARKET_SIZE = 210  # 7 cards * 30 features each
-OBS_CRYSTAL_SIZE = 12
-OBS_REAL_SIZE = 322  # BOARD (100) + MARKET (210) + CRYSTAL (12)
-NUM_ACTIONS = 2800   # 7 cards * 10 * 10 * 4
-OBS_TOTAL_SIZE = OBS_REAL_SIZE + NUM_ACTIONS
 
+# Observation dimensions (Base values, will be dynamic)
+# BOARD_SIZE and derived constants removed as globals, now instance specific
 
 class Crystalboard(pufferlib.PufferEnv):
     """Crystalboard environment using C backend for fast vectorized simulation."""
@@ -37,6 +30,7 @@ class Crystalboard(pufferlib.PufferEnv):
         buf=None,
         frameskip=1,
         seed=0,
+        board_size=10,
     ):
         """Initialize Crystalboard environment.
         
@@ -47,21 +41,31 @@ class Crystalboard(pufferlib.PufferEnv):
             max_steps: Maximum steps per episode before truncation
             buf: Pre-allocated buffer (optional)
             seed: Random seed
+            board_size: Grid width/height (default 10)
         """
+        self.board_size = board_size
+        
+        # Calculate dynamic dimensions
+        self.num_actions = 7 * board_size * board_size * 4
+        self.obs_board_size = board_size * board_size
+        self.obs_market_size = 210
+        self.obs_crystal_size = 12
+        self.obs_real_size = self.obs_board_size + self.obs_market_size + self.obs_crystal_size
+        self.obs_total_size = self.obs_real_size + self.num_actions
+        
         # Define observation and action spaces
         self.single_observation_space = gymnasium.spaces.Box(
             low=0.0,
             high=1.0,
-            shape=(OBS_TOTAL_SIZE,),
+            shape=(self.obs_total_size,),
             dtype=np.float32
         )
-        self.single_action_space = gymnasium.spaces.Discrete(NUM_ACTIONS)
+        self.single_action_space = gymnasium.spaces.Discrete(self.num_actions)
         
         self.render_mode = render_mode
         self.num_agents = num_envs
         self.log_interval = log_interval
         self.max_steps = max_steps
-        self.frameskip = frameskip
         self.frameskip = frameskip
         
         if render_mode is None:
@@ -72,6 +76,8 @@ class Crystalboard(pufferlib.PufferEnv):
                     if idx + 1 < len(sys.argv):
                         render_mode = sys.argv[idx + 1]
                         self.render_mode = render_mode
+                        if render_mode == 'human':
+                            self.frameskip = 1
                         print(f"DEBUG: Manually parsed render_mode={render_mode} from sys.argv")
                 except ValueError:
                     pass
@@ -88,8 +94,9 @@ class Crystalboard(pufferlib.PufferEnv):
             num_envs,
             seed,
             max_steps=max_steps,
-            frameskip=frameskip,
-            render_mode=1 if render_mode == 'human' else 0,
+            frameskip=self.frameskip,
+            render_mode=1 if self.render_mode == 'human' else 0,
+            board_size=board_size,
         )
     
     def reset(self, seed=0):
@@ -135,7 +142,7 @@ class Crystalboard(pufferlib.PufferEnv):
 
 # For compatibility with env_creator in environment.py
 def make_crystalboard(num_envs=1, render_mode=None, log_interval=128,
-                   max_steps=200, buf=None, seed=0, frameskip=1, **kwargs):
+                   max_steps=200, buf=None, seed=0, frameskip=1, board_size=10, **kwargs):
     """Factory function to create Crystalboard environment."""
     return Crystalboard(
         num_envs=num_envs,
@@ -145,6 +152,7 @@ def make_crystalboard(num_envs=1, render_mode=None, log_interval=128,
         buf=buf,
         seed=seed,
         frameskip=frameskip,
+        board_size=board_size,
     )
 
 
