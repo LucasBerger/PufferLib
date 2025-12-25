@@ -125,13 +125,22 @@ typedef struct {
 
 // Reward constants (from research/reward_constants.py)
 // Invalid moves now terminate the episode, so penalty doesn't need to be extreme
-#define REWARD_STEP_PENALTY -1.0f
-#define REWARD_INVALID_MOVE -1.0f
+#define REWARD_STEP_PENALTY -0.1f
+#define REWARD_INVALID_MOVE -0.1f
 #define REWARD_VALID_PLACEMENT 0.0f
-#define REWARD_DISTANCE_SCALE 0.5f
-#define REWARD_CONNECTION 10.0f
-#define REWARD_WIN_BONUS 50.0f
+#define REWARD_DISTANCE_SCALE 0.01f
+#define REWARD_CONNECTION 5.0f
+#define REWARD_WIN_BONUS 10.0f
 #define REWARD_NO_VALID_ACTIONS -1.0f
+
+// Invalid moves now terminate the episode, so penalty doesn't need to be extreme
+// #define REWARD_STEP_PENALTY -0.1f
+// #define REWARD_INVALID_MOVE -0.1f
+// #define REWARD_VALID_PLACEMENT 0.0f
+// #define REWARD_DISTANCE_SCALE 0.2f
+// #define REWARD_CONNECTION 5.0f
+// #define REWARD_WIN_BONUS 10.0f
+// #define REWARD_NO_VALID_ACTIONS -1.0f
 
 // Shape library - common shapes from game/default_content.py
 static const int SHAPE_L[4][2] = {{0,0}, {0,1}, {0,2}, {1,2}};
