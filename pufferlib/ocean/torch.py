@@ -1317,3 +1317,142 @@ class CrystalboardHybridPolicy(nn.Module):
 class Crystalboard30x30(CrystalboardHybridPolicy):
     def __init__(self, env, **kwargs):
         super().__init__(env, board_size=30, **kwargs)
+class CrystalboardUNet(nn.Module):
+    """
+    Efficient U-Net style policy for Crystalboard.
+    Uses MaxPool downsampling -> Transformer Bottleneck -> Upsampling in decoder.
+    Target: < 100k parameters.
+    """
+    def __init__(
+        self, 
+        env, 
+        embed_dim=64,
+        num_heads=4,
+        num_layers=2, 
+        hidden_size=256,
+        board_size=10,
+        **kwargs
+    ):
+        super().__init__()
+        self.board_size = board_size
+        self.num_grid_tiles = board_size * board_size
+        self.market_size = 210
+        self.crystal_size = 12
+        self.obs_real_size = self.num_grid_tiles + self.market_size + self.crystal_size
+        self.embed_dim = embed_dim
+        
+        # Calculate pooled dimensions (downsample by 2)
+        self.pooled_size = board_size // 2
+        self.num_pooled_tokens = self.pooled_size * self.pooled_size
+        
+        # --- 1. Board Encoder (Spatial) ---
+        # 5 tile types, 2 owner types.
+        self.type_embed = nn.Embedding(5, 8) 
+        self.owner_embed = nn.Embedding(2, 4)
+        
+        # CNN Encoder: BxBx -> (B/2)x(B/2)
+        self.board_cnn_in = nn.Sequential(
+            nn.Conv2d(8+4, 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, embed_dim, kernel_size=3, padding=1),
+            nn.ReLU()
+        )
+        self.pool = nn.MaxPool2d(2) 
+        
+        # Positional embeddings for pooled grid
+        self.board_pos_embed = nn.Parameter(torch.randn(1, self.num_pooled_tokens, embed_dim) * 0.02)
+        
+        # --- 2. Market Encoder ---
+        self.market_encoder = SpatialCardEncoder(embed_dim)
+        # Positional embeddings for 7 market cards
+        self.market_pos_embed = nn.Parameter(torch.randn(1, 7, embed_dim) * 0.02)
+        
+        # --- 3. Bottleneck (Transformer) ---
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim, nhead=num_heads, dim_feedforward=embed_dim*2, 
+            dropout=0.1, batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # --- 4. Decoder (Spatial) ---
+        self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
+        self.decoder_cnn = nn.Sequential(
+            nn.Conv2d(embed_dim, 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 28, kernel_size=1) # 28 channels = 7 cards * 4 rotations
+        )
+        
+        self.value_head = pufferlib.pytorch.layer_init(nn.Linear(embed_dim, 1), std=1.0)
+
+    def forward(self, observations, state=None):
+        action_mask = None
+        if isinstance(observations, tuple):
+             observations, action_mask = observations
+        elif observations.shape[-1] > self.obs_real_size:
+             action_mask = observations[:, self.obs_real_size:]
+             observations = observations[:, :self.obs_real_size]
+        
+        device = observations.device
+        B = observations.shape[0]
+        
+        # Split Obs
+        board_obs = observations[:, :self.num_grid_tiles]
+        market_start = self.num_grid_tiles
+        market_obs = observations[:, market_start:market_start+self.market_size].reshape(B, 7, 30)
+        
+        # --- 1. Process Board ---
+        raw_board = (board_obs * 14.0).round().long()
+        ownership = (raw_board >= 10).long()
+        tile_type = raw_board % 10
+        
+        emb_type = self.type_embed(tile_type).transpose(1, 2).view(B, 8, self.board_size, self.board_size)
+        emb_owner = self.owner_embed(ownership).transpose(1, 2).view(B, 4, self.board_size, self.board_size)
+        cnn_in = torch.cat([emb_type, emb_owner], dim=1) 
+        
+        board_features = self.board_cnn_in(cnn_in) 
+        pooled_features = self.pool(board_features) 
+        
+        board_tokens = pooled_features.flatten(2).transpose(1, 2) 
+        board_tokens = board_tokens + self.board_pos_embed
+        
+        # --- 2. Process Market ---
+        market_tokens = self.market_encoder(market_obs)
+        market_tokens = market_tokens + self.market_pos_embed
+        
+        # --- 3. Fusion ---
+        all_tokens = torch.cat([board_tokens, market_tokens], dim=1)
+        hidden = self.transformer(all_tokens)
+        
+        # Global pooling for Value function
+        global_pooled = torch.max(hidden, dim=1)[0]
+        value = self.value_head(global_pooled)
+        
+        # --- 4. Decoder ---
+        # Extract board tokens, reshape and upsample
+        decoded_board_tokens = hidden[:, :self.num_pooled_tokens, :] 
+        
+        # Reshape to pooled_size x pooled_size
+        spatial_features = decoded_board_tokens.transpose(1, 2).view(B, self.embed_dim, self.pooled_size, self.pooled_size)
+        upsampled = self.upsample(spatial_features) 
+        
+        logits = self.decoder_cnn(upsampled) # (B, 28, H, W)
+        
+        # Reshape to (B, 7, 4, H, W)
+        logits = logits.view(B, 7, 4, self.board_size, self.board_size)
+        
+        # Permute to match Action Space: Card * (H*W*4) + Pos * 4 + Rot
+        # Order: Card, Y, X, Rot
+        logits = logits.permute(0, 1, 3, 4, 2) # (B, 7, H, W, 4)
+        
+        actions = logits.reshape(B, -1) 
+        
+        if action_mask is not None:
+            actions = actions.masked_fill(action_mask < 0.5, -1e9)
+            
+        return actions, value
+
+    def forward_train(self, x, state=None):
+        return self.forward(x, state)
+
+    def forward_eval(self, observations, state=None):
+        return self.forward(observations, state)

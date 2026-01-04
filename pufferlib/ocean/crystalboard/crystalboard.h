@@ -125,12 +125,12 @@ typedef struct {
 
 // Reward constants (from research/reward_constants.py)
 // Invalid moves now terminate the episode, so penalty doesn't need to be extreme
-#define REWARD_STEP_PENALTY -0.1f
-#define REWARD_INVALID_MOVE -0.1f
+#define REWARD_STEP_PENALTY -0.02f
+#define REWARD_INVALID_MOVE -0.02f
 #define REWARD_VALID_PLACEMENT 0.0f
-#define REWARD_DISTANCE_SCALE 0.01f
+#define REWARD_DISTANCE_SCALE 0.05f
 #define REWARD_CONNECTION 5.0f
-#define REWARD_WIN_BONUS 10.0f
+#define REWARD_WIN_BONUS 3.0f
 #define REWARD_NO_VALID_ACTIONS -1.0f
 
 // Invalid moves now terminate the episode, so penalty doesn't need to be extreme
@@ -141,6 +141,8 @@ typedef struct {
 // #define REWARD_CONNECTION 5.0f
 // #define REWARD_WIN_BONUS 10.0f
 // #define REWARD_NO_VALID_ACTIONS -1.0f
+// #define REWARD_NO_VALID_ACTIONS -1.0f
+#define REWARD_STREET_BLOCKING_PENALTY -0.5f
 
 // Shape library - common shapes from game/default_content.py
 static const int SHAPE_L[4][2] = {{0,0}, {0,1}, {0,2}, {1,2}};
@@ -934,6 +936,29 @@ void c_step(Crystalboard* env) {
 
     env->valid_placements++;
     env->rewards[0] += REWARD_VALID_PLACEMENT;
+
+    // Penalty for blocking crystals with streets
+    if (!is_building) {
+        for (int i = 0; i < card->shape.num_cells; i++) {
+            int bx = x + rotated_shape[i][0];
+            int by = y + rotated_shape[i][1];
+            
+            int blocking = 0;
+            for (int c = 0; c < NUM_CRYSTALS; c++) {
+                 if (env->crystals[c].connected) continue;
+
+                 int dist = abs(bx - env->crystals[c].x) + abs(by - env->crystals[c].y);
+                 if (dist == 1) {
+                     // Directly adjacent to an unconnected crystal with a street -> Blocking!
+                     blocking = 1;
+                     break;
+                 }
+            }
+            if (blocking) {
+                env->rewards[0] += REWARD_STREET_BLOCKING_PENALTY;
+            }
+        }
+    }
     
     float current_total_dist = 0;
     int active_crystals = 0;
