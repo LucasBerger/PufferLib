@@ -1341,26 +1341,29 @@ class CrystalboardUNet(nn.Module):
         self.obs_real_size = self.num_grid_tiles + self.market_size + self.crystal_size
         self.embed_dim = embed_dim
         
-        # Calculate pooled dimensions (downsample by 2)
-        self.pooled_size = board_size // 2
-        self.num_pooled_tokens = self.pooled_size * self.pooled_size
+        # Calculate patch dimensions (30x30 -> 6x6 patches of 5x5)
+        self.patch_size = 3
+        self.num_patches_1d = board_size // self.patch_size
+        self.num_patches = self.num_patches_1d ** 2
         
         # --- 1. Board Encoder (Spatial) ---
         # 5 tile types, 2 owner types.
         self.type_embed = nn.Embedding(5, 8) 
         self.owner_embed = nn.Embedding(2, 4)
         
-        # CNN Encoder: BxBx -> (B/2)x(B/2)
+        # CNN Encoder: Bx12x30x30 -> BxEmbedx30x30
         self.board_cnn_in = nn.Sequential(
             nn.Conv2d(8+4, 32, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Conv2d(32, embed_dim, kernel_size=3, padding=1),
             nn.ReLU()
         )
-        self.pool = nn.MaxPool2d(2) 
+        # Patch Encoder: (Embed * 5 * 5) -> Embed
+        self.patch_input_dim = embed_dim * self.patch_size * self.patch_size
+        self.patch_encoder = nn.Linear(self.patch_input_dim, embed_dim)
         
         # Positional embeddings for pooled grid
-        self.board_pos_embed = nn.Parameter(torch.randn(1, self.num_pooled_tokens, embed_dim) * 0.02)
+        self.board_pos_embed = nn.Parameter(torch.randn(1, self.num_patches, embed_dim) * 0.02)
         
         # --- 2. Market Encoder ---
         self.market_encoder = SpatialCardEncoder(embed_dim)
@@ -1375,7 +1378,9 @@ class CrystalboardUNet(nn.Module):
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
         # --- 4. Decoder (Spatial) ---
-        self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
+        # Patch Decoder: Embed -> (Embed * 5 * 5)
+        self.patch_decoder = nn.Linear(embed_dim, self.patch_input_dim)
+        
         self.decoder_cnn = nn.Sequential(
             nn.Conv2d(embed_dim, 32, kernel_size=3, padding=1),
             nn.ReLU(),
@@ -1409,10 +1414,17 @@ class CrystalboardUNet(nn.Module):
         emb_owner = self.owner_embed(ownership).transpose(1, 2).view(B, 4, self.board_size, self.board_size)
         cnn_in = torch.cat([emb_type, emb_owner], dim=1) 
         
-        board_features = self.board_cnn_in(cnn_in) 
-        pooled_features = self.pool(board_features) 
+        # CNN Feature extraction
+        board_features = self.board_cnn_in(cnn_in) # (B, Embed, 30, 30)
         
-        board_tokens = pooled_features.flatten(2).transpose(1, 2) 
+        # Patchify
+        # Unfold to (B, Embed, 6, 5, 6, 5) where 6 is num_patches_1d
+        patches = board_features.unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)
+        # Reshape to (B, Embed, 6, 6, 5, 5) -> (B, 6*6, Embed*5*5)
+        patches = patches.contiguous().view(B, self.embed_dim, self.num_patches_1d, self.num_patches_1d, self.patch_size, self.patch_size)
+        patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous().view(B, self.num_patches, -1)
+        
+        board_tokens = self.patch_encoder(patches)
         board_tokens = board_tokens + self.board_pos_embed
         
         # --- 2. Process Market ---
@@ -1428,14 +1440,18 @@ class CrystalboardUNet(nn.Module):
         value = self.value_head(global_pooled)
         
         # --- 4. Decoder ---
-        # Extract board tokens, reshape and upsample
-        decoded_board_tokens = hidden[:, :self.num_pooled_tokens, :] 
+        # Extract board tokens
+        decoded_tokens = hidden[:, :self.num_patches, :] 
         
-        # Reshape to pooled_size x pooled_size
-        spatial_features = decoded_board_tokens.transpose(1, 2).view(B, self.embed_dim, self.pooled_size, self.pooled_size)
-        upsampled = self.upsample(spatial_features) 
+        # Depatchify
+        patch_features = self.patch_decoder(decoded_tokens) # (B, 36, Embed*25)
         
-        logits = self.decoder_cnn(upsampled) # (B, 28, H, W)
+        # Reshape back to (B, Embed, 6, 6, 5, 5)
+        patch_features = patch_features.view(B, self.num_patches_1d, self.num_patches_1d, self.embed_dim, self.patch_size, self.patch_size)
+        # Permute to (B, Embed, 6, 5, 6, 5) -> (B, Embed, 30, 30)
+        spatial_features = patch_features.permute(0, 3, 1, 4, 2, 5).contiguous().view(B, self.embed_dim, self.board_size, self.board_size)
+        
+        logits = self.decoder_cnn(spatial_features) # (B, 28, H, W)
         
         # Reshape to (B, 7, 4, H, W)
         logits = logits.view(B, 7, 4, self.board_size, self.board_size)

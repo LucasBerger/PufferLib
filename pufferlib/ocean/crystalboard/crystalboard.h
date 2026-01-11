@@ -129,9 +129,9 @@ typedef struct {
 #define REWARD_INVALID_MOVE -0.02f
 #define REWARD_VALID_PLACEMENT 0.0f
 #define REWARD_DISTANCE_SCALE 0.05f
-#define REWARD_CONNECTION 5.0f
-#define REWARD_WIN_BONUS 3.0f
-#define REWARD_NO_VALID_ACTIONS -1.0f
+#define REWARD_CONNECTION 8.0f
+#define REWARD_WIN_BONUS 10.0f
+#define REWARD_NO_VALID_ACTIONS -10.0f
 
 // Invalid moves now terminate the episode, so penalty doesn't need to be extreme
 // #define REWARD_STEP_PENALTY -0.1f
@@ -143,6 +143,7 @@ typedef struct {
 // #define REWARD_NO_VALID_ACTIONS -1.0f
 // #define REWARD_NO_VALID_ACTIONS -1.0f
 #define REWARD_STREET_BLOCKING_PENALTY -0.5f
+#define REWARD_FAR_BUILDING_PENALTY -0.0f
 
 // Shape library - common shapes from game/default_content.py
 static const int SHAPE_L[4][2] = {{0,0}, {0,1}, {0,2}, {1,2}};
@@ -553,7 +554,7 @@ static int encode_action(Crystalboard* env, int card_idx, int x, int y, int rota
 // OBS_REAL_SIZE = board_tiles + 210 + 12
 // OBS_TOTAL_SIZE = OBS_REAL_SIZE + NUM_ACTIONS (for action mask)
 
-static void fill_observation(Crystalboard* env) {
+static int fill_observation(Crystalboard* env) {
     int idx = 0;
     
     // Board observation
@@ -636,6 +637,8 @@ static void fill_observation(Crystalboard* env) {
         env->observations[idx + i] = 0.0f;
     }
 
+    int valid_action_count = 0;
+
     // This loop is expensive for large grids (30x30x7x4 = ~25k iterations)
     for (int card_idx = 0; card_idx < TOTAL_MARKET_SLOTS; card_idx++) {
         for (int x = 0; x < env->width; x++) {
@@ -646,11 +649,14 @@ static void fill_observation(Crystalboard* env) {
                         
                         int action_idx = encode_action(env, card_idx, x, y, r);
                         env->observations[idx + action_idx] = 1.0f;
+                        valid_action_count++;
                     }
                 }
             }
         }
     }
+    
+    return valid_action_count;
 }
 
 void add_log(Crystalboard* env) {
@@ -948,7 +954,7 @@ void c_step(Crystalboard* env) {
                  if (env->crystals[c].connected) continue;
 
                  int dist = abs(bx - env->crystals[c].x) + abs(by - env->crystals[c].y);
-                 if (dist == 1) {
+                 if (dist < 2) {
                      // Directly adjacent to an unconnected crystal with a street -> Blocking!
                      blocking = 1;
                      break;
@@ -992,6 +998,27 @@ void c_step(Crystalboard* env) {
     if (curr_connected > prev_connected) {
         env->rewards[0] += REWARD_CONNECTION;
     }
+
+    // Penalty for placing extraction buildings too far from crystals
+    if (is_building) {
+        int min_dist_to_any_crystal = env->width + env->height;
+        
+        for (int i = 0; i < card->shape.num_cells; i++) {
+            int bx = x + rotated_shape[i][0];
+            int by = y + rotated_shape[i][1];
+            
+            for (int c = 0; c < NUM_CRYSTALS; c++) {
+                int dist = abs(bx - env->crystals[c].x) + abs(by - env->crystals[c].y);
+                if (dist < min_dist_to_any_crystal) {
+                    min_dist_to_any_crystal = dist;
+                }
+            }
+        }
+        
+        if (min_dist_to_any_crystal > 5) {
+            env->rewards[0] += REWARD_FAR_BUILDING_PENALTY;
+        }
+    }
     
     if (curr_connected >= 3) {
         env->rewards[0] += REWARD_WIN_BONUS;
@@ -1018,8 +1045,23 @@ void c_step(Crystalboard* env) {
         return;
     }
     
+    int valid_actions = fill_observation(env);
+    
+    if (valid_actions == 0) {
+        env->rewards[0] += REWARD_NO_VALID_ACTIONS;
+        env->terminals[0] = 1;
+    }
+
     env->log.episode_return += env->rewards[0];
-    fill_observation(env);
+    
+    if (env->terminals[0]) {
+        add_log(env);
+        if (env->render_mode) {
+             c_render(env);
+             WaitTime(4.0f);
+        }
+        c_reset(env);
+    }
 }
 
 void c_close(Crystalboard* env) {
