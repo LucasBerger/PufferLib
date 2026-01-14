@@ -1347,9 +1347,9 @@ class CrystalboardUNet(nn.Module):
         self.num_patches = self.num_patches_1d ** 2
         
         # --- 1. Board Encoder (Spatial) ---
-        # 5 tile types, 2 owner types.
+        # 5 tile types, 5 owner types (0 for nothing and 1 to 4 for players but 1 is always yourself).
         self.type_embed = nn.Embedding(5, 8) 
-        self.owner_embed = nn.Embedding(2, 4)
+        self.owner_embed = nn.Embedding(5, 4)
         
         # CNN Encoder: Bx12x30x30 -> BxEmbedx30x30
         self.board_cnn_in = nn.Sequential(
@@ -1391,6 +1391,7 @@ class CrystalboardUNet(nn.Module):
 
     def forward(self, observations, state=None):
         action_mask = None
+        print(observations.shape)
         if isinstance(observations, tuple):
              observations, action_mask = observations
         elif observations.shape[-1] > self.obs_real_size:
@@ -1399,6 +1400,9 @@ class CrystalboardUNet(nn.Module):
         
         device = observations.device
         B = observations.shape[0]
+        print(B)
+
+        print(observations.shape)
         
         # Split Obs
         board_obs = observations[:, :self.num_grid_tiles]
@@ -1406,9 +1410,15 @@ class CrystalboardUNet(nn.Module):
         market_obs = observations[:, market_start:market_start+self.market_size].reshape(B, 7, 30)
         
         # --- 1. Process Board ---
-        raw_board = (board_obs * 14.0).round().long()
-        ownership = (raw_board >= 10).long()
+        raw_board = (board_obs * 44.0).round().long()
+        ownership = (raw_board / 10).floor().long()
         tile_type = raw_board % 10
+
+        print(ownership.unique())
+        print(self.owner_embed)
+
+        print(torch.max(ownership))
+        print(torch.min(ownership))
         
         emb_type = self.type_embed(tile_type).transpose(1, 2).view(B, 8, self.board_size, self.board_size)
         emb_owner = self.owner_embed(ownership).transpose(1, 2).view(B, 4, self.board_size, self.board_size)
@@ -1472,3 +1482,24 @@ class CrystalboardUNet(nn.Module):
 
     def forward_eval(self, observations, state=None):
         return self.forward(observations, state)
+
+class CrystalboardCompUNet(CrystalboardUNet):
+    def __init__(self, env, **kwargs):
+        super().__init__(env, **kwargs)
+        # Update observation size for 10 crystals
+        self.crystal_size = 70
+        self.obs_real_size = self.num_grid_tiles + self.market_size + self.crystal_size
+
+    def forward(self, observations, state=None):
+        # Handle Sync bytes (3 floats) if present in raw observation
+        # Env provides: [Features(1180) | Sync(3) | Mask]
+        # Base expects: [Features(1180) | Mask]
+        if isinstance(observations, torch.Tensor):
+             # Check for raw observation full size handling
+             # 1180 + 3 + 25200 = 26383
+             if observations.shape[-1] == 26383:
+                  features = observations[:, :1180]
+                  mask = observations[:, 1183:]
+                  observations = torch.cat([features, mask], dim=1)
+        
+        return super().forward(observations, state)

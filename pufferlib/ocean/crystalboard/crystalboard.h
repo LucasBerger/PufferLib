@@ -568,7 +568,7 @@ static int fill_observation(Crystalboard* env) {
         if (env->board_owner[i] == 1) {
             val += 10.0f;
         }
-        env->observations[idx++] = val / 14.0f;
+        env->observations[idx++] = val / 44.0f;
     }
     
     // Market cards
