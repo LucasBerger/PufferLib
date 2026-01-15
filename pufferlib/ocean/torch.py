@@ -1503,3 +1503,124 @@ class CrystalboardCompUNet(CrystalboardUNet):
                   observations = torch.cat([features, mask], dim=1)
         
         return super().forward(observations, state)
+
+class QuarryCardEncoder(nn.Module):
+    """Encodes market card with costs."""
+    def __init__(self, embed_dim):
+        super().__init__()
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        # +5 for: is_building, points, size, cost_c, cost_s
+        self.fc = nn.Linear(32 * 5 * 5 + 5, embed_dim) 
+
+    def forward(self, card_obs):
+        # card_obs: [B, N, 30]
+        B, N, F_dim = card_obs.shape
+        metadata = card_obs[:, :, :3]
+        costs = card_obs[:, :, 28:30] # The new cost slots (padding was 28,29)
+        shapes = card_obs[:, :, 3:28].reshape(B * N, 1, 5, 5)
+
+        x = F.relu(self.conv1(shapes))
+        x = F.relu(self.conv2(x))
+        x = x.view(B, N, -1)
+        
+        meta = torch.cat([metadata, costs], dim=2)
+        x = torch.cat([x, meta], dim=2)
+        return self.fc(x)
+
+class QuarryboardUNet(CrystalboardUNet):
+    """
+    Quarryboard policy handling Resources, Costs, and Pass/Finish actions.
+    """
+    def __init__(self, env, embed_dim=64, **kwargs):
+        super().__init__(env, embed_dim=embed_dim, **kwargs)
+        
+        # Override Market Encoder
+        self.market_encoder = QuarryCardEncoder(embed_dim)
+        
+        # New Resource Encoder
+        # 4 players * 5 stats (score, stone, cumu, fin, dead) = 20
+        self.resource_encoder = nn.Sequential(
+            nn.Linear(20, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, embed_dim)
+        )
+        self.resource_pos_embed = nn.Parameter(torch.randn(1, 1, embed_dim) * 0.02)
+        
+        # Update Obs Sizes
+        # Board(900) + Market(210) + Crystal(70) + Resource(20) = 1200
+        self.obs_real_size = 900 + 210 + 70 + 20
+        self.num_std_actions = 25200
+        
+        # Pass/Finish Head
+        self.pass_finish_head = pufferlib.pytorch.layer_init(nn.Linear(embed_dim, 2), std=1.0)
+        
+    def forward(self, observations, state=None):
+        action_mask = None
+        if isinstance(observations, tuple):
+             observations, action_mask = observations
+        elif observations.shape[-1] > self.obs_real_size:
+             action_mask = observations[:, self.obs_real_size:]
+             observations = observations[:, :self.obs_real_size]
+        
+        B = observations.shape[0]
+        
+        # Split Obs
+        board_obs = observations[:, :900]
+        market_obs = observations[:, 900:1110].reshape(B, 7, 30)
+        # Crystal info (1110..1180) skipped (implicit in board)
+        resource_obs = observations[:, 1180:1200]
+        
+        # --- 1. Process Board ---
+        raw_board = (board_obs * 44.0).round().long()
+        ownership = (raw_board / 10).floor().long()
+        tile_type = raw_board % 10
+        
+        emb_type = self.type_embed(tile_type).transpose(1, 2).view(B, 8, self.board_size, self.board_size)
+        emb_owner = self.owner_embed(ownership).transpose(1, 2).view(B, 4, self.board_size, self.board_size)
+        cnn_in = torch.cat([emb_type, emb_owner], dim=1) 
+        
+        board_features = self.board_cnn_in(cnn_in) 
+        
+        patches = board_features.unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)
+        patches = patches.contiguous().view(B, self.embed_dim, self.num_patches_1d, self.num_patches_1d, self.patch_size, self.patch_size)
+        patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous().view(B, self.num_patches, -1)
+        
+        board_tokens = self.patch_encoder(patches)
+        board_tokens = board_tokens + self.board_pos_embed
+        
+        # --- 2. Process Market ---
+        market_tokens = self.market_encoder(market_obs)
+        market_tokens = market_tokens + self.market_pos_embed
+        
+        # --- 3. Process Resources ---
+        resource_token = self.resource_encoder(resource_obs).unsqueeze(1)
+        resource_token = resource_token + self.resource_pos_embed
+        
+        # --- 4. Fusion ---
+        all_tokens = torch.cat([board_tokens, market_tokens, resource_token], dim=1)
+        hidden = self.transformer(all_tokens)
+        
+        global_pooled = torch.max(hidden, dim=1)[0]
+        value = self.value_head(global_pooled)
+        
+        # --- 5. Decoder ---
+        decoded_tokens = hidden[:, :self.num_patches, :] 
+        patch_features = self.patch_decoder(decoded_tokens)
+        patch_features = patch_features.view(B, self.num_patches_1d, self.num_patches_1d, self.embed_dim, self.patch_size, self.patch_size)
+        spatial_features = patch_features.permute(0, 3, 1, 4, 2, 5).contiguous().view(B, self.embed_dim, self.board_size, self.board_size)
+        
+        logits = self.decoder_cnn(spatial_features) 
+        logits = logits.view(B, 7, 4, self.board_size, self.board_size)
+        logits = logits.permute(0, 1, 3, 4, 2) # (B, 7, H, W, 4)
+        actions_grid = logits.reshape(B, -1) 
+        
+        # Pass/Finish
+        actions_pf = self.pass_finish_head(global_pooled)
+        
+        actions = torch.cat([actions_grid, actions_pf], dim=1)
+        
+        if action_mask is not None:
+            actions = actions.masked_fill(action_mask < 0.5, -1e9)
+            
+        return actions, value
